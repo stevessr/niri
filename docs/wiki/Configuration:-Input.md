@@ -4,7 +4,7 @@ In this section you can configure input devices like keyboard and mouse, and som
 
 There's a section for each device type: `keyboard`, `touchpad`, `mouse`, `trackpoint`, `trackball`, `tablet`, `touch`.
 Settings in those sections will apply to every device of that type.
-Currently, there's no way to configure specific devices individually (but that is planned).
+Touchscreens can additionally override the output mapping per specific input device.
 
 All settings at a glance:
 
@@ -99,6 +99,12 @@ input {
         // off
         map-to-output "eDP-1"
         // calibration-matrix 1.0 0.0 0.0 0.0 1.0 0.0
+
+        // Per-device touchscreen output mapping.
+        // The device name must match the libinput device name or sysname.
+        device "Wacom HID 5218 Finger" {
+            map-to-output "HDMI-A-1"
+        }
     }
 
     // disable-power-key-handling
@@ -280,6 +286,29 @@ input {
 ```
 
 Valid output names are the same as the ones used for output configuration.
+
+Touchscreen mappings can also be overridden for individual input devices:
+
+```kdl
+input {
+    touch {
+        // Optional fallback for touchscreen devices without their own entry.
+        map-to-output "eDP-1"
+
+        device "Wacom HID 5218 Finger" {
+            map-to-output "HDMI-A-1"
+        }
+
+        device "ELAN9008:00 04F3:2A79" {
+            map-to-output "DP-1"
+        }
+    }
+}
+```
+
+The `device` argument must exactly match either the libinput device name or the sysname such as `event12`.
+You can find device names with `libinput list-devices` or `libinput debug-events`.
+The first matching `device` entry wins; if none matches, niri uses the top-level `touch.map-to-output`, or the first output if there is no mapping.
 
 <sup>Since: 0.1.7</sup> When a tablet is not mapped to any output, it will map to the union of all connected outputs, without aspect ratio correction.
 

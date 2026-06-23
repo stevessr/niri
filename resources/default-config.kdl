@@ -61,6 +61,14 @@ input {
         // middle-emulation
     }
 
+    // Map touchscreens to outputs. Device entries override the fallback map-to-output.
+    // touch {
+    //     // map-to-output "eDP-1"
+    //     // device "Wacom HID 5218 Finger" {
+    //     //     map-to-output "HDMI-A-1"
+    //     // }
+    // }
+
     // Uncomment this to make the mouse warp to the center of newly focused windows.
     // warp-mouse-to-focus
 

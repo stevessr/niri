@@ -3634,6 +3634,22 @@ impl Niri {
             .or_else(|| self.global_space.outputs().next())
     }
 
+    pub fn output_for_touch_device(&self, device: &input::Device) -> Option<&Output> {
+        let map_to_output = {
+            let config = self.config.borrow();
+            let touch = &config.input.touch;
+            touch
+                .map_to_output_for_device(device.name().as_ref(), device.sysname())
+                .or(touch.map_to_output.as_deref())
+                .map(str::to_owned)
+        };
+
+        map_to_output
+            .as_deref()
+            .and_then(|name| self.output_by_name_match(name))
+            .or_else(|| self.global_space.outputs().next())
+    }
+
     pub fn output_by_name_match(&self, target: &str) -> Option<&Output> {
         self.global_space
             .outputs()
