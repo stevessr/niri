@@ -4146,11 +4146,23 @@ impl State {
     fn compute_touch_location<I: InputBackend>(
         &self,
         evt: &impl AbsolutePositionEvent<I>,
-    ) -> Option<Point<f64, Logical>> {
-        self.compute_absolute_location(evt, self.niri.output_for_touch())
+    ) -> Option<Point<f64, Logical>>
+    where
+        I::Device: 'static,
+    {
+        let device = evt.device();
+        let output = (&device as &dyn Any)
+            .downcast_ref::<input::Device>()
+            .map(|device| self.niri.output_for_touch_device(device))
+            .unwrap_or_else(|| self.niri.output_for_touch());
+
+        self.compute_absolute_location(evt, output)
     }
 
-    fn on_touch_down<I: InputBackend>(&mut self, evt: I::TouchDownEvent) {
+    fn on_touch_down<I: InputBackend>(&mut self, evt: I::TouchDownEvent)
+    where
+        I::Device: 'static,
+    {
         let Some(handle) = self.niri.seat.get_touch() else {
             return;
         };
@@ -4305,7 +4317,10 @@ impl State {
             },
         )
     }
-    fn on_touch_motion<I: InputBackend>(&mut self, evt: I::TouchMotionEvent) {
+    fn on_touch_motion<I: InputBackend>(&mut self, evt: I::TouchMotionEvent)
+    where
+        I::Device: 'static,
+    {
         let Some(handle) = self.niri.seat.get_touch() else {
             return;
         };

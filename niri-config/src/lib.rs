@@ -727,6 +727,10 @@ mod tests {
 
                 touch {
                     map-to-output "eDP-1"
+
+                    device "Wacom HID 5218 Finger" {
+                        map-to-output "HDMI-A-1"
+                    }
                 }
 
                 disable-power-key-handling
@@ -1124,6 +1128,12 @@ mod tests {
                     map_to_output: Some(
                         "eDP-1",
                     ),
+                    devices: [
+                        TouchDevice {
+                            name: "Wacom HID 5218 Finger",
+                            map_to_output: "HDMI-A-1",
+                        },
+                    ],
                 },
                 disable_power_key_handling: true,
                 warp_mouse_to_focus: Some(

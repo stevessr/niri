@@ -379,6 +379,31 @@ pub struct Touch {
     pub calibration_matrix: Option<Vec<f32>>,
     #[knuffel(child, unwrap(argument))]
     pub map_to_output: Option<String>,
+    #[knuffel(children(name = "device"))]
+    pub devices: Vec<TouchDevice>,
+}
+
+impl Touch {
+    pub fn map_to_output_for_device(&self, name: &str, sysname: &str) -> Option<&str> {
+        self.devices
+            .iter()
+            .find(|device| device.matches(name, sysname))
+            .map(|device| device.map_to_output.as_str())
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Clone, PartialEq)]
+pub struct TouchDevice {
+    #[knuffel(argument)]
+    pub name: String,
+    #[knuffel(child, unwrap(argument))]
+    pub map_to_output: String,
+}
+
+impl TouchDevice {
+    pub fn matches(&self, name: &str, sysname: &str) -> bool {
+        self.name == name || self.name == sysname
+    }
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]
@@ -522,6 +547,50 @@ mod tests {
             .map_err(miette::Report::new)
             .unwrap();
         Input::from_part(&part)
+    }
+
+    #[test]
+    fn parse_per_touch_device_output_mapping() {
+        let parsed = do_parse(
+            r#"
+            touch {
+                map-to-output "eDP-1"
+
+                device "Wacom HID 5218 Finger" {
+                    map-to-output "HDMI-A-1"
+                }
+            }
+            "#,
+        );
+
+        assert_eq!(
+            parsed
+                .touch
+                .map_to_output_for_device("Wacom HID 5218 Finger", "event12"),
+            Some("HDMI-A-1")
+        );
+        assert_eq!(
+            parsed
+                .touch
+                .map_to_output_for_device("Other Touchscreen", "event12"),
+            None
+        );
+    }
+
+    #[test]
+    fn per_touch_device_output_mapping_matches_sysname() {
+        let touch = Touch {
+            devices: vec![TouchDevice {
+                name: "event12".to_owned(),
+                map_to_output: "DP-1".to_owned(),
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            touch.map_to_output_for_device("Other Touchscreen", "event12"),
+            Some("DP-1")
+        );
     }
 
     #[test]
