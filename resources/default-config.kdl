@@ -61,12 +61,19 @@ input {
         // middle-emulation
     }
 
-    // Map touchscreens to outputs. Device entries override the fallback map-to-output.
+    // You can override any device-type section by adding a device name argument.
+    // The device name must match the libinput device name or sysname.
+    // For example:
+    // mouse "Gaming Mouse" {
+    //     accel-speed -0.5
+    // }
+    //
+    // Map touchscreens to outputs.
     // touch {
     //     // map-to-output "eDP-1"
-    //     // device "Wacom HID 5218 Finger" {
-    //     //     map-to-output "HDMI-A-1"
-    //     // }
+    // }
+    // touch "Wacom HID 5218 Finger" {
+    //     map-to-output "HDMI-A-1"
     // }
 
     // Uncomment this to make the mouse warp to the center of newly focused windows.

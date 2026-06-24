@@ -75,6 +75,46 @@ pub struct TabletData {
     pub aspect_ratio: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LibinputDeviceKind {
+    Touchpad,
+    Mouse,
+    Trackpoint,
+    Trackball,
+}
+
+fn libinput_pointer_device_kind(device: &input::Device) -> Option<LibinputDeviceKind> {
+    // According to Mutter code, this setting is specific to touchpads.
+    let is_touchpad = device.config_tap_finger_count() > 0;
+    if is_touchpad {
+        return Some(LibinputDeviceKind::Touchpad);
+    }
+
+    let mut is_trackball = false;
+    let mut is_trackpoint = false;
+    if let Some(udev_device) = unsafe { device.udev_device() } {
+        if udev_device.property_value("ID_INPUT_TRACKBALL").is_some() {
+            is_trackball = true;
+        }
+        if udev_device
+            .property_value("ID_INPUT_POINTINGSTICK")
+            .is_some()
+        {
+            is_trackpoint = true;
+        }
+    }
+
+    if is_trackball {
+        Some(LibinputDeviceKind::Trackball)
+    } else if is_trackpoint {
+        Some(LibinputDeviceKind::Trackpoint)
+    } else if device.has_capability(input::DeviceCapability::Pointer) {
+        Some(LibinputDeviceKind::Mouse)
+    } else {
+        None
+    }
+}
+
 pub enum PointerOrTouchStartData<D: SeatHandler> {
     Pointer(PointerGrabStartData<D>),
     Touch(TouchGrabStartData<D>),
@@ -293,14 +333,27 @@ impl State {
     where
         I::Device: 'static,
     {
-        let device_output = event.device().output(self);
+        let device = event.device();
+        let tablet_config = {
+            let config = self.niri.config.borrow();
+            if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
+                config
+                    .input
+                    .tablet_for_device(device.name().as_ref(), Some(device.sysname()))
+                    .clone()
+            } else {
+                config.input.tablet.clone()
+            }
+        };
+
+        let device_output = device.output(self);
         let device_output = device_output.filter(|output| self.niri.output_exists(output));
         let device_output = device_output.as_ref();
-        let mapped_output = device_output.or_else(|| self.niri.output_for_tablet());
+        let mapped_output = device_output.or_else(|| self.niri.output_for_tablet(&tablet_config));
 
         // If the tablet is configured to map to the focused window, use that window's geometry on
         // the mapped output (or on the focused output if no specific output is mapped).
-        let map_to_focused_window = self.niri.config.borrow().input.tablet.map_to_focused_window;
+        let map_to_focused_window = tablet_config.map_to_focused_window;
         // But only if the keyboard focus is on the layout, so that it doesn't trigger on the lock
         // screen and such.
         let window_target = if map_to_focused_window && self.niri.keyboard_focus.is_layout() {
@@ -393,7 +446,11 @@ impl State {
         &mut self,
         event: I::KeyboardKeyEvent,
         consumed_by_a11y: &mut bool,
-    ) {
+    ) where
+        I::Device: 'static,
+    {
+        self.apply_keyboard_config::<I>(&event);
+
         let mod_key = self.backend.mod_key(&self.niri.config.borrow());
 
         let serial = SERIAL_COUNTER.next_serial();
@@ -584,6 +641,29 @@ impl State {
         self.start_key_repeat(bind);
     }
 
+    fn apply_keyboard_config<I: InputBackend>(&mut self, event: &I::KeyboardKeyEvent)
+    where
+        I::Device: 'static,
+    {
+        let device = event.device();
+        let keyboard_config = {
+            let config = self.niri.config.borrow();
+            if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
+                config
+                    .input
+                    .keyboard_for_device(device.name().as_ref(), Some(device.sysname()))
+                    .clone()
+            } else {
+                config
+                    .input
+                    .keyboard_for_device(device.name().as_ref(), None)
+                    .clone()
+            }
+        };
+
+        self.set_current_keyboard(keyboard_config);
+    }
+
     fn start_key_repeat(&mut self, bind: Bind) {
         if !bind.repeat {
             return;
@@ -594,8 +674,7 @@ impl State {
             self.niri.event_loop.remove(token);
         }
 
-        let config = self.niri.config.borrow();
-        let config = &config.input.keyboard;
+        let config = &self.niri.current_keyboard;
 
         let repeat_rate = config.repeat_rate;
         if repeat_rate == 0 {
@@ -3071,7 +3150,10 @@ impl State {
         pointer.frame(self);
     }
 
-    fn on_pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent) {
+    fn on_pointer_axis<I: InputBackend>(&mut self, event: I::PointerAxisEvent)
+    where
+        I::Device: 'static,
+    {
         let pointer = &self.niri.seat.get_pointer().unwrap();
 
         let source = event.source();
@@ -3484,10 +3566,29 @@ impl State {
 
         let device_scroll_factor = {
             let config = self.niri.config.borrow();
-            match source {
-                AxisSource::Wheel => config.input.mouse.scroll_factor,
-                AxisSource::Finger => config.input.touchpad.scroll_factor,
-                _ => None,
+            let device = event.device();
+            if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
+                match libinput_pointer_device_kind(device) {
+                    Some(LibinputDeviceKind::Touchpad) => {
+                        config
+                            .input
+                            .touchpad_for_device(device.name().as_ref(), Some(device.sysname()))
+                            .scroll_factor
+                    }
+                    Some(LibinputDeviceKind::Mouse) => {
+                        config
+                            .input
+                            .mouse_for_device(device.name().as_ref(), Some(device.sysname()))
+                            .scroll_factor
+                    }
+                    _ => None,
+                }
+            } else {
+                match source {
+                    AxisSource::Wheel => config.input.mouse.scroll_factor,
+                    AxisSource::Finger => config.input.touchpad.scroll_factor,
+                    _ => None,
+                }
             }
         };
 
@@ -4151,10 +4252,18 @@ impl State {
         I::Device: 'static,
     {
         let device = evt.device();
-        let output = (&device as &dyn Any)
-            .downcast_ref::<input::Device>()
-            .map(|device| self.niri.output_for_touch_device(device))
-            .unwrap_or_else(|| self.niri.output_for_touch());
+        let touch_config = {
+            let config = self.niri.config.borrow();
+            if let Some(device) = (&device as &dyn Any).downcast_ref::<input::Device>() {
+                config
+                    .input
+                    .touch_for_device(device.name().as_ref(), Some(device.sysname()))
+                    .clone()
+            } else {
+                config.input.touch.clone()
+            }
+        };
+        let output = self.niri.output_for_touch(&touch_config);
 
         self.compute_absolute_location(evt, output)
     }
@@ -4778,10 +4887,13 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
 }
 
 pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::Device) {
-    // According to Mutter code, this setting is specific to touchpads.
-    let is_touchpad = device.config_tap_finger_count() > 0;
+    let name = device.name().to_string();
+    let sysname = device.sysname().to_string();
+    let pointer_kind = libinput_pointer_device_kind(device);
+
+    let is_touchpad = pointer_kind == Some(LibinputDeviceKind::Touchpad);
     if is_touchpad {
-        let c = &config.touchpad;
+        let c = config.touchpad_for_device(&name, Some(&sysname));
         let _ = device.config_send_events_set_mode(if c.off {
             input::SendEventsMode::DISABLED
         } else if c.disabled_on_external_mouse {
@@ -4856,27 +4968,9 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
         }
     }
 
-    // This is how Mutter tells apart mice.
-    let mut is_trackball = false;
-    let mut is_trackpoint = false;
-    if let Some(udev_device) = unsafe { device.udev_device() } {
-        if udev_device.property_value("ID_INPUT_TRACKBALL").is_some() {
-            is_trackball = true;
-        }
-        if udev_device
-            .property_value("ID_INPUT_POINTINGSTICK")
-            .is_some()
-        {
-            is_trackpoint = true;
-        }
-    }
-
-    let is_mouse = device.has_capability(input::DeviceCapability::Pointer)
-        && !is_touchpad
-        && !is_trackball
-        && !is_trackpoint;
+    let is_mouse = pointer_kind == Some(LibinputDeviceKind::Mouse);
     if is_mouse {
-        let c = &config.mouse;
+        let c = config.mouse_for_device(&name, Some(&sysname));
         let _ = device.config_send_events_set_mode(if c.off {
             input::SendEventsMode::DISABLED
         } else {
@@ -4922,8 +5016,9 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
         }
     }
 
+    let is_trackball = pointer_kind == Some(LibinputDeviceKind::Trackball);
     if is_trackball {
-        let c = &config.trackball;
+        let c = config.trackball_for_device(&name, Some(&sysname));
         let _ = device.config_send_events_set_mode(if c.off {
             input::SendEventsMode::DISABLED
         } else {
@@ -4969,8 +5064,9 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
         }
     }
 
+    let is_trackpoint = pointer_kind == Some(LibinputDeviceKind::Trackpoint);
     if is_trackpoint {
-        let c = &config.trackpoint;
+        let c = config.trackpoint_for_device(&name, Some(&sysname));
         let _ = device.config_send_events_set_mode(if c.off {
             input::SendEventsMode::DISABLED
         } else {
@@ -5018,7 +5114,7 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
 
     let is_tablet = device.has_capability(input::DeviceCapability::TabletTool);
     if is_tablet {
-        let c = &config.tablet;
+        let c = config.tablet_for_device(&name, Some(&sysname));
         let _ = device.config_send_events_set_mode(if c.off {
             input::SendEventsMode::DISABLED
         } else {
@@ -5044,7 +5140,7 @@ pub fn apply_libinput_settings(config: &niri_config::Input, device: &mut input::
 
     let is_touch = device.has_capability(input::DeviceCapability::Touch);
     if is_touch {
-        let c = &config.touch;
+        let c = config.touch_for_device(&name, Some(&sysname));
         let _ = device.config_send_events_set_mode(if c.off {
             input::SendEventsMode::DISABLED
         } else {
