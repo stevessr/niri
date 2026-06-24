@@ -50,7 +50,9 @@ pub use crate::binds::*;
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
-pub use crate::input::{Input, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb};
+pub use crate::input::{
+    Input, Keyboard, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb,
+};
 pub use crate::layer_rule::LayerRule;
 pub use crate::layout::*;
 pub use crate::misc::*;
@@ -744,10 +746,10 @@ mod tests {
 
                 touch {
                     map-to-output "eDP-1"
+                }
 
-                    device "Wacom HID 5218 Finger" {
-                        map-to-output "HDMI-A-1"
-                    }
+                touch "Wacom HID 5218 Finger" {
+                    map-to-output "HDMI-A-1"
                 }
 
                 disable-power-key-handling
@@ -997,6 +999,7 @@ mod tests {
         Config {
             input: Input {
                 keyboard: Keyboard {
+                    name: None,
                     xkb: Xkb {
                         rules: "",
                         model: "",
@@ -1012,7 +1015,9 @@ mod tests {
                     track_layout: Window,
                     numlock: false,
                 },
+                keyboards: [],
                 touchpad: Touchpad {
+                    name: None,
                     off: false,
                     tap: true,
                     dwt: true,
@@ -1061,7 +1066,9 @@ mod tests {
                         ),
                     ),
                 },
+                touchpads: [],
                 mouse: Mouse {
+                    name: None,
                     off: false,
                     natural_scroll: true,
                     accel_speed: FloatOrInt(
@@ -1091,7 +1098,9 @@ mod tests {
                         },
                     ),
                 },
+                mice: [],
                 trackpoint: Trackpoint {
+                    name: None,
                     off: true,
                     natural_scroll: true,
                     accel_speed: FloatOrInt(
@@ -1110,7 +1119,9 @@ mod tests {
                     left_handed: false,
                     middle_emulation: false,
                 },
+                trackpoints: [],
                 trackball: Trackball {
+                    name: None,
                     off: true,
                     natural_scroll: true,
                     accel_speed: FloatOrInt(
@@ -1129,7 +1140,9 @@ mod tests {
                     left_handed: true,
                     middle_emulation: true,
                 },
+                trackballs: [],
                 tablet: Tablet {
+                    name: None,
                     off: false,
                     calibration_matrix: Some(
                         [
@@ -1148,19 +1161,27 @@ mod tests {
                     map_to_focused_window: true,
                     left_handed: false,
                 },
+                tablets: [],
                 touch: Touch {
+                    name: None,
                     off: false,
                     calibration_matrix: None,
                     map_to_output: Some(
                         "eDP-1",
                     ),
-                    devices: [
-                        TouchDevice {
-                            name: "Wacom HID 5218 Finger",
-                            map_to_output: "HDMI-A-1",
-                        },
-                    ],
                 },
+                touch_devices: [
+                    Touch {
+                        name: Some(
+                            "Wacom HID 5218 Finger",
+                        ),
+                        off: false,
+                        calibration_matrix: None,
+                        map_to_output: Some(
+                            "HDMI-A-1",
+                        ),
+                    },
+                ],
                 disable_power_key_handling: true,
                 warp_mouse_to_focus: Some(
                     WarpMouseToFocus {
