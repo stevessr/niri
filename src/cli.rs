@@ -53,10 +53,100 @@ pub enum Sub {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Experimental Miracast / Wi-Fi Display helper commands.
+    Miracast {
+        #[command(subcommand)]
+        command: MiracastCommand,
+    },
     /// Cause a panic to check if the backtraces are good.
     Panic,
     /// Generate shell completions.
     Completions { shell: CompletionShell },
+}
+
+#[derive(Subcommand)]
+pub enum MiracastCommand {
+    /// Scan for Wi-Fi Direct peers, including Miracast sinks.
+    Scan {
+        /// Wi-Fi interface controlled by wpa_supplicant.
+        #[arg(short = 'i', long)]
+        ifname: Option<String>,
+        /// How long to scan for, in seconds.
+        #[arg(short, long, default_value_t = 8)]
+        timeout: u64,
+        /// Print machine-readable JSON.
+        #[arg(short, long)]
+        json: bool,
+        /// Show only peers that advertise Wi-Fi Display / Miracast capabilities.
+        #[arg(long)]
+        miracast_only: bool,
+        /// Flush wpa_supplicant's P2P peer cache before scanning.
+        #[arg(long)]
+        flush: bool,
+        /// Do not advertise local Wi-Fi Display source capabilities before scanning.
+        #[arg(long)]
+        no_wfd: bool,
+        /// Wi-Fi Display Device Information subelement payload passed to wpa_cli.
+        #[arg(long, default_value = "000600111c440032")]
+        wfd_device_info: String,
+    },
+    /// Establish a Wi-Fi Direct link to a discovered Miracast sink.
+    Connect {
+        /// Peer P2P device address from `niri miracast scan`.
+        #[arg()]
+        peer: String,
+        /// Wi-Fi interface controlled by wpa_supplicant.
+        #[arg(short = 'i', long)]
+        ifname: Option<String>,
+        /// How long to wait for command completion, in seconds.
+        #[arg(short, long, default_value_t = 45)]
+        timeout: u64,
+        /// Print machine-readable JSON.
+        #[arg(short, long)]
+        json: bool,
+        /// Use this PIN with the peer's keypad method instead of PBC.
+        #[arg(long, conflicts_with = "display_pin")]
+        pin: Option<String>,
+        /// Ask wpa_supplicant to generate and display a PIN instead of PBC.
+        #[arg(long)]
+        display_pin: bool,
+        /// Request a persistent P2P group.
+        #[arg(long)]
+        persistent: bool,
+        /// Force join-client behavior for an already-running Group Owner.
+        #[arg(long)]
+        join: bool,
+        /// Request a Provision Discovery exchange before group formation.
+        #[arg(long)]
+        provdisc: bool,
+        /// Do not let wpa_supplicant automatically decide whether to join an existing GO.
+        #[arg(long)]
+        no_auto: bool,
+        /// Override P2P GO intent, 0..15.
+        #[arg(long)]
+        go_intent: Option<u8>,
+        /// Force an operating frequency in MHz.
+        #[arg(long)]
+        freq: Option<u32>,
+        /// Do not advertise local Wi-Fi Display source capabilities before connecting.
+        #[arg(long)]
+        no_wfd: bool,
+        /// Wi-Fi Display Device Information subelement payload passed to wpa_cli.
+        #[arg(long, default_value = "000600111c440032")]
+        wfd_device_info: String,
+    },
+    /// Remove a P2P group interface.
+    Disconnect {
+        /// P2P group interface to remove, for example `p2p-wlan0-0`.
+        #[arg()]
+        group_ifname: String,
+        /// Wi-Fi interface controlled by wpa_supplicant.
+        #[arg(short = 'i', long)]
+        ifname: Option<String>,
+        /// Print machine-readable JSON.
+        #[arg(short, long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

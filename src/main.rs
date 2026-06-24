@@ -110,6 +110,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 handle_msg(msg, json)?;
                 return Ok(());
             }
+            Sub::Miracast { command } => {
+                niri::miracast::handle_miracast(command)?;
+                return Ok(());
+            }
             Sub::Panic => cause_panic(),
             Sub::Completions { shell } => {
                 match shell {
