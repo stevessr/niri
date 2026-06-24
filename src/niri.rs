@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::unix::net::UnixStream;
@@ -16,7 +16,7 @@ use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
 use niri_config::output::MaxBpc;
 use niri_config::{
-    Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
+    Config, FloatOrInt, Key, Keyboard, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
     WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
@@ -112,6 +112,8 @@ use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 use smithay::wayland::xdg_foreign::XdgForeignState;
 use wayland_server::protocol::wl_output::WlOutput;
+
+type SurfaceKeyboardLayouts = RefCell<HashMap<Option<String>, KeyboardLayout>>;
 
 #[cfg(feature = "dbus")]
 use crate::a11y::A11y;
@@ -267,6 +269,8 @@ pub struct Niri {
     /// startup, libinput will immediately send a closed event.
     pub is_lid_closed: bool,
 
+    pub current_keyboard: Keyboard,
+    pub keyboard_layouts: HashMap<Option<String>, KeyboardLayout>,
     pub devices: HashSet<input::Device>,
     pub tablets: HashMap<input::Device, TabletData>,
     pub touch: HashSet<input::Device>,
@@ -1332,38 +1336,16 @@ impl State {
                 }
             }
 
-            if self.niri.config.borrow().input.keyboard.track_layout == TrackLayout::Window {
-                let current_layout = keyboard.with_xkb_state(self, |context| {
-                    let xkb = context.xkb().lock().unwrap();
-                    xkb.active_layout()
-                });
+            let current_keyboard = self.niri.current_keyboard.clone();
+            if current_keyboard.track_layout == TrackLayout::Window {
+                let current_layout = self.active_keyboard_layout();
+                self.remember_current_keyboard_layout();
+                let new_layout =
+                    self.keyboard_layout_for_surface(&current_keyboard, focus.surface());
 
-                let mut new_layout = current_layout;
-                // Store the currently active layout for the surface.
-                if let Some(current_focus) = self.niri.keyboard_focus.surface() {
-                    with_states(current_focus, |data| {
-                        let cell = data
-                            .data_map
-                            .get_or_insert::<Cell<KeyboardLayout>, _>(Cell::default);
-                        cell.set(current_layout);
-                    });
-                }
-
-                if let Some(focus) = focus.surface() {
-                    new_layout = with_states(focus, |data| {
-                        let cell = data.data_map.get_or_insert::<Cell<KeyboardLayout>, _>(|| {
-                            // The default layout is effectively the first layout in the
-                            // keymap, so use it for new windows.
-                            Cell::new(KeyboardLayout::default())
-                        });
-                        cell.get()
-                    });
-                }
                 if new_layout != current_layout && focus.surface().is_some() {
                     keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
-                    keyboard.with_xkb_state(self, |mut context| {
-                        context.set_layout(new_layout);
-                    });
+                    self.set_active_keyboard_layout(new_layout);
                 }
             }
 
@@ -1399,6 +1381,127 @@ impl State {
         }
 
         Ok(())
+    }
+
+    pub fn active_keyboard_layout(&mut self) -> KeyboardLayout {
+        let keyboard = self.niri.seat.get_keyboard().unwrap();
+        keyboard.with_xkb_state(self, |context| {
+            let xkb = context.xkb().lock().unwrap();
+            xkb.active_layout()
+        })
+    }
+
+    pub fn set_active_keyboard_layout(&mut self, layout: KeyboardLayout) {
+        let keyboard = self.niri.seat.get_keyboard().unwrap();
+        keyboard.with_xkb_state(self, |mut context| {
+            context.set_layout(layout);
+        });
+    }
+
+    pub fn remember_current_keyboard_layout(&mut self) {
+        let layout = self.active_keyboard_layout();
+        let id = self.niri.current_keyboard.name.clone();
+
+        if self.niri.current_keyboard.track_layout == TrackLayout::Window {
+            if let Some(surface) = self.niri.keyboard_focus.surface() {
+                with_states(surface, |data| {
+                    let layouts = data
+                        .data_map
+                        .get_or_insert::<SurfaceKeyboardLayouts, _>(Default::default);
+                    layouts.borrow_mut().insert(id, layout);
+                });
+            }
+        } else {
+            self.niri.keyboard_layouts.insert(id, layout);
+        }
+    }
+
+    pub fn keyboard_layout_for_surface(
+        &self,
+        keyboard: &Keyboard,
+        surface: Option<&WlSurface>,
+    ) -> KeyboardLayout {
+        let id = keyboard.name.clone();
+
+        if keyboard.track_layout == TrackLayout::Window {
+            surface
+                .and_then(|surface| {
+                    with_states(surface, |data| {
+                        let layouts = data.data_map.get::<SurfaceKeyboardLayouts>()?;
+                        layouts.borrow().get(&id).copied()
+                    })
+                })
+                .unwrap_or_default()
+        } else {
+            self.niri
+                .keyboard_layouts
+                .get(&id)
+                .copied()
+                .unwrap_or_default()
+        }
+    }
+
+    pub fn keyboard_layout_for_focus(&self, keyboard: &Keyboard) -> KeyboardLayout {
+        self.keyboard_layout_for_surface(keyboard, self.niri.keyboard_focus.surface())
+    }
+
+    pub fn set_keyboard_xkb(&mut self, mut xkb: Xkb) {
+        let mut set_xkb_config = true;
+
+        // It's fine to .take() the xkb file, as this is a clone and the file field is not used in
+        // the XkbConfig.
+        if let Some(xkb_file) = xkb.file.take() {
+            if let Err(err) = self.set_xkb_file(xkb_file) {
+                warn!("error loading xkb_file: {err:?}");
+            } else {
+                // We successfully set xkb file so we don't need to fallback to XkbConfig.
+                set_xkb_config = false;
+            }
+        }
+
+        if set_xkb_config {
+            // If xkb is unset in the niri config, use settings from locale1.
+            if xkb == Xkb::default() {
+                trace!("using xkb from locale1");
+                xkb = self.niri.xkb_from_locale1.clone().unwrap_or_default();
+            }
+
+            self.set_xkb_config(xkb.to_xkb_config());
+        }
+    }
+
+    pub fn set_current_keyboard(&mut self, keyboard_config: Keyboard) {
+        if keyboard_config == self.niri.current_keyboard {
+            return;
+        }
+
+        self.remember_current_keyboard_layout();
+
+        let xkb_changed = keyboard_config.xkb != self.niri.current_keyboard.xkb;
+        let repeat_changed = keyboard_config.repeat_rate != self.niri.current_keyboard.repeat_rate
+            || keyboard_config.repeat_delay != self.niri.current_keyboard.repeat_delay;
+
+        if xkb_changed {
+            self.set_keyboard_xkb(keyboard_config.xkb.clone());
+        }
+
+        if repeat_changed {
+            let keyboard = self.niri.seat.get_keyboard().unwrap();
+            keyboard.change_repeat_info(
+                keyboard_config.repeat_rate.into(),
+                keyboard_config.repeat_delay.into(),
+            );
+        }
+
+        let layout = self.keyboard_layout_for_focus(&keyboard_config);
+        self.niri.current_keyboard = keyboard_config;
+        self.set_active_keyboard_layout(layout);
+
+        if xkb_changed {
+            self.ipc_keyboard_layouts_changed();
+        } else {
+            self.ipc_refresh_keyboard_layout_index();
+        }
     }
 
     fn load_xkb_file(&mut self) {
@@ -1474,6 +1577,7 @@ impl State {
         *CHILD_ENV.write().unwrap() = mem::take(&mut config.environment);
 
         let mut reload_xkb = None;
+        let mut new_current_keyboard = None;
         let mut libinput_config_changed = false;
         let mut output_config_changed = false;
         let mut preserved_output_config = None;
@@ -1483,6 +1587,7 @@ impl State {
         let mut cursor_inactivity_timeout_changed = false;
         let mut recent_windows_changed = false;
         let mut xwls_changed = false;
+        self.remember_current_keyboard_layout();
         let mut old_config = self.niri.config.borrow_mut();
 
         // Reload the cursor.
@@ -1493,28 +1598,43 @@ impl State {
             self.niri.cursor_texture_cache.clear();
         }
 
-        // We need &mut self to reload the xkb config, so just store it here.
-        if config.input.keyboard.xkb != old_config.input.keyboard.xkb {
-            reload_xkb = Some(config.input.keyboard.xkb.clone());
-        }
-
-        // Reload the repeat info.
-        if config.input.keyboard.repeat_rate != old_config.input.keyboard.repeat_rate
-            || config.input.keyboard.repeat_delay != old_config.input.keyboard.repeat_delay
+        if config.input.keyboard != old_config.input.keyboard
+            || config.input.keyboards != old_config.input.keyboards
         {
-            let keyboard = self.niri.seat.get_keyboard().unwrap();
-            keyboard.change_repeat_info(
-                config.input.keyboard.repeat_rate.into(),
-                config.input.keyboard.repeat_delay.into(),
-            );
+            let current_keyboard = self.niri.current_keyboard.clone();
+            let keyboard = config
+                .input
+                .keyboard_by_config_name(current_keyboard.name.as_deref())
+                .clone();
+
+            // We need &mut self to reload the xkb config, so just store it here.
+            if keyboard.xkb != current_keyboard.xkb {
+                reload_xkb = Some(keyboard.xkb.clone());
+            }
+
+            if keyboard.repeat_rate != current_keyboard.repeat_rate
+                || keyboard.repeat_delay != current_keyboard.repeat_delay
+            {
+                let seat_keyboard = self.niri.seat.get_keyboard().unwrap();
+                seat_keyboard
+                    .change_repeat_info(keyboard.repeat_rate.into(), keyboard.repeat_delay.into());
+            }
+
+            new_current_keyboard = Some(keyboard);
         }
 
         if config.input.touchpad != old_config.input.touchpad
+            || config.input.touchpads != old_config.input.touchpads
             || config.input.mouse != old_config.input.mouse
+            || config.input.mice != old_config.input.mice
             || config.input.trackball != old_config.input.trackball
+            || config.input.trackballs != old_config.input.trackballs
             || config.input.trackpoint != old_config.input.trackpoint
+            || config.input.trackpoints != old_config.input.trackpoints
             || config.input.tablet != old_config.input.tablet
+            || config.input.tablets != old_config.input.tablets
             || config.input.touch != old_config.input.touch
+            || config.input.touch_devices != old_config.input.touch_devices
         {
             libinput_config_changed = true;
         }
@@ -1624,32 +1744,21 @@ impl State {
         // Release the borrow.
         drop(old_config);
 
+        let mut keyboard_layout_after_reload = None;
+        if let Some(keyboard) = new_current_keyboard {
+            let layout = self.keyboard_layout_for_focus(&keyboard);
+            self.niri.current_keyboard = keyboard;
+            keyboard_layout_after_reload = Some(layout);
+        }
+
         // Now with a &mut self we can reload the xkb config.
-        if let Some(mut xkb) = reload_xkb {
-            let mut set_xkb_config = true;
-
-            // It's fine to .take() the xkb file, as this is a
-            // clone and the file field is not used in the XkbConfig.
-            if let Some(xkb_file) = xkb.file.take() {
-                if let Err(err) = self.set_xkb_file(xkb_file) {
-                    warn!("error reloading xkb_file: {err:?}");
-                } else {
-                    // We successfully set xkb file so we don't need to fallback to XkbConfig.
-                    set_xkb_config = false;
-                }
-            }
-
-            if set_xkb_config {
-                // If xkb is unset in the niri config, use settings from locale1.
-                if xkb == Xkb::default() {
-                    trace!("using xkb from locale1");
-                    xkb = self.niri.xkb_from_locale1.clone().unwrap_or_default();
-                }
-
-                self.set_xkb_config(xkb.to_xkb_config());
-            }
-
+        if let Some(xkb) = reload_xkb {
+            self.set_keyboard_xkb(xkb);
             self.ipc_keyboard_layouts_changed();
+        }
+        if let Some(layout) = keyboard_layout_after_reload {
+            self.set_active_keyboard_layout(layout);
+            self.ipc_refresh_keyboard_layout_index();
         }
 
         if libinput_config_changed {
@@ -2220,8 +2329,7 @@ impl State {
         let xkb = self.niri.xkb_from_locale1.insert(xkb);
 
         {
-            let config = self.niri.config.borrow();
-            if config.input.keyboard.xkb != Xkb::default() {
+            if self.niri.current_keyboard.xkb != Xkb::default() {
                 trace!("ignoring locale1 xkb change because niri config has xkb settings");
                 return;
             }
@@ -2380,11 +2488,13 @@ impl Niri {
         #[cfg(test)]
         let single_pixel_buffer_state = SinglePixelBufferState::new::<State>(&display_handle);
 
+        let fallback_keyboard = config_.input.keyboard.clone();
+
         let mut seat: Seat<State> = seat_state.new_wl_seat(&display_handle, backend.seat_name());
         let keyboard = match seat.add_keyboard(
-            config_.input.keyboard.xkb.to_xkb_config(),
-            config_.input.keyboard.repeat_delay.into(),
-            config_.input.keyboard.repeat_rate.into(),
+            fallback_keyboard.xkb.to_xkb_config(),
+            fallback_keyboard.repeat_delay.into(),
+            fallback_keyboard.repeat_rate.into(),
         ) {
             Err(err) => {
                 if let smithay::input::keyboard::Error::BadKeymap = err {
@@ -2394,14 +2504,14 @@ impl Niri {
                 }
                 seat.add_keyboard(
                     Default::default(),
-                    config_.input.keyboard.repeat_delay.into(),
-                    config_.input.keyboard.repeat_rate.into(),
+                    fallback_keyboard.repeat_delay.into(),
+                    fallback_keyboard.repeat_rate.into(),
                 )
                 .unwrap()
             }
             Ok(keyboard) => keyboard,
         };
-        if config_.input.keyboard.numlock {
+        if fallback_keyboard.numlock {
             let mut modifier_state = keyboard.modifier_state();
             modifier_state.num_lock = true;
             keyboard.set_modifier_state(modifier_state);
@@ -2523,6 +2633,8 @@ impl Niri {
             monitors_active: true,
             is_lid_closed: false,
 
+            current_keyboard: fallback_keyboard,
+            keyboard_layouts: HashMap::new(),
             devices: HashSet::new(),
             tablets: HashMap::new(),
             touch: HashSet::new(),
@@ -3616,36 +3728,18 @@ impl Niri {
             .map(|(_, m)| m.window.clone())
     }
 
-    pub fn output_for_tablet(&self) -> Option<&Output> {
-        let config = self.config.borrow();
-        if config.input.tablet.map_to_focused_output {
+    pub fn output_for_tablet(&self, tablet: &niri_config::input::Tablet) -> Option<&Output> {
+        if tablet.map_to_focused_output {
             self.layout.active_output()
         } else {
-            let map_to_output = config.input.tablet.map_to_output.as_ref();
+            let map_to_output = tablet.map_to_output.as_ref();
             map_to_output.and_then(|name| self.output_by_name_match(name))
         }
     }
 
-    pub fn output_for_touch(&self) -> Option<&Output> {
-        let config = self.config.borrow();
-        let map_to_output = config.input.touch.map_to_output.as_ref();
+    pub fn output_for_touch(&self, touch: &niri_config::input::Touch) -> Option<&Output> {
+        let map_to_output = touch.map_to_output.as_ref();
         map_to_output
-            .and_then(|name| self.output_by_name_match(name))
-            .or_else(|| self.global_space.outputs().next())
-    }
-
-    pub fn output_for_touch_device(&self, device: &input::Device) -> Option<&Output> {
-        let map_to_output = {
-            let config = self.config.borrow();
-            let touch = &config.input.touch;
-            touch
-                .map_to_output_for_device(device.name().as_ref(), device.sysname())
-                .or(touch.map_to_output.as_deref())
-                .map(str::to_owned)
-        };
-
-        map_to_output
-            .as_deref()
             .and_then(|name| self.output_by_name_match(name))
             .or_else(|| self.global_space.outputs().next())
     }

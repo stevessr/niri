@@ -11,12 +11,19 @@ use crate::FloatOrInt;
 #[derive(Debug, Default, PartialEq)]
 pub struct Input {
     pub keyboard: Keyboard,
+    pub keyboards: Vec<Keyboard>,
     pub touchpad: Touchpad,
+    pub touchpads: Vec<Touchpad>,
     pub mouse: Mouse,
+    pub mice: Vec<Mouse>,
     pub trackpoint: Trackpoint,
+    pub trackpoints: Vec<Trackpoint>,
     pub trackball: Trackball,
+    pub trackballs: Vec<Trackball>,
     pub tablet: Tablet,
+    pub tablets: Vec<Tablet>,
     pub touch: Touch,
+    pub touch_devices: Vec<Touch>,
     pub disable_power_key_handling: bool,
     pub warp_mouse_to_focus: Option<WarpMouseToFocus>,
     pub focus_follows_mouse: Option<FocusFollowsMouse>,
@@ -27,20 +34,20 @@ pub struct Input {
 
 #[derive(knuffel::Decode, Debug, Default, PartialEq)]
 pub struct InputPart {
-    #[knuffel(child)]
-    pub keyboard: Option<KeyboardPart>,
-    #[knuffel(child)]
-    pub touchpad: Option<Touchpad>,
-    #[knuffel(child)]
-    pub mouse: Option<Mouse>,
-    #[knuffel(child)]
-    pub trackpoint: Option<Trackpoint>,
-    #[knuffel(child)]
-    pub trackball: Option<Trackball>,
-    #[knuffel(child)]
-    pub tablet: Option<Tablet>,
-    #[knuffel(child)]
-    pub touch: Option<Touch>,
+    #[knuffel(children(name = "keyboard"))]
+    pub keyboards: Vec<KeyboardPart>,
+    #[knuffel(children(name = "touchpad"))]
+    pub touchpads: Vec<Touchpad>,
+    #[knuffel(children(name = "mouse"))]
+    pub mice: Vec<Mouse>,
+    #[knuffel(children(name = "trackpoint"))]
+    pub trackpoints: Vec<Trackpoint>,
+    #[knuffel(children(name = "trackball"))]
+    pub trackballs: Vec<Trackball>,
+    #[knuffel(children(name = "tablet"))]
+    pub tablets: Vec<Tablet>,
+    #[knuffel(children(name = "touch"))]
+    pub touch_devices: Vec<Touch>,
     #[knuffel(child)]
     pub disable_power_key_handling: Option<Flag>,
     #[knuffel(child)]
@@ -59,19 +66,8 @@ impl MergeWith<InputPart> for Input {
     fn merge_with(&mut self, part: &InputPart) {
         merge!(
             (self, part),
-            keyboard,
             disable_power_key_handling,
             workspace_auto_back_and_forth,
-        );
-
-        merge_clone!(
-            (self, part),
-            touchpad,
-            mouse,
-            trackpoint,
-            trackball,
-            tablet,
-            touch,
         );
 
         merge_clone_opt!(
@@ -81,11 +77,117 @@ impl MergeWith<InputPart> for Input {
             mod_key,
             mod_key_nested,
         );
+
+        for keyboard in &part.keyboards {
+            if keyboard.name.is_some() {
+                self.keyboards.push(Keyboard::from_part(keyboard));
+            } else {
+                self.keyboard.merge_with(keyboard);
+            }
+        }
+
+        macro_rules! merge_device_blocks {
+            ($general:ident, $devices:ident, $parts:ident) => {
+                for device_config in &part.$parts {
+                    if device_config.name.is_some() {
+                        self.$devices.push(device_config.clone());
+                    } else {
+                        self.$general.clone_from(device_config);
+                    }
+                }
+            };
+        }
+
+        merge_device_blocks!(touchpad, touchpads, touchpads);
+        merge_device_blocks!(mouse, mice, mice);
+        merge_device_blocks!(trackpoint, trackpoints, trackpoints);
+        merge_device_blocks!(trackball, trackballs, trackballs);
+        merge_device_blocks!(tablet, tablets, tablets);
+        merge_device_blocks!(touch, touch_devices, touch_devices);
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+fn device_identifier_matches(identifier: &str, name: &str, sysname: Option<&str>) -> bool {
+    identifier.eq_ignore_ascii_case(name)
+        || sysname.is_some_and(|sysname| identifier.eq_ignore_ascii_case(sysname))
+}
+
+fn find_named_config<'a, T>(
+    configs: &'a [T],
+    name: &str,
+    sysname: Option<&str>,
+    config_name: impl Fn(&'a T) -> Option<&'a str>,
+) -> Option<&'a T> {
+    configs.iter().find(|config| {
+        config_name(config)
+            .is_some_and(|identifier| device_identifier_matches(identifier, name, sysname))
+    })
+}
+
+impl Input {
+    pub fn keyboard_for_device(&self, name: &str, sysname: Option<&str>) -> &Keyboard {
+        find_named_config(&self.keyboards, name, sysname, |config| {
+            config.name.as_deref()
+        })
+        .unwrap_or(&self.keyboard)
+    }
+
+    pub fn keyboard_by_config_name(&self, name: Option<&str>) -> &Keyboard {
+        name.and_then(|name| {
+            self.keyboards.iter().find(|config| {
+                config
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+            })
+        })
+        .unwrap_or(&self.keyboard)
+    }
+
+    pub fn touchpad_for_device(&self, name: &str, sysname: Option<&str>) -> &Touchpad {
+        find_named_config(&self.touchpads, name, sysname, |config| {
+            config.name.as_deref()
+        })
+        .unwrap_or(&self.touchpad)
+    }
+
+    pub fn mouse_for_device(&self, name: &str, sysname: Option<&str>) -> &Mouse {
+        find_named_config(&self.mice, name, sysname, |config| config.name.as_deref())
+            .unwrap_or(&self.mouse)
+    }
+
+    pub fn trackpoint_for_device(&self, name: &str, sysname: Option<&str>) -> &Trackpoint {
+        find_named_config(&self.trackpoints, name, sysname, |config| {
+            config.name.as_deref()
+        })
+        .unwrap_or(&self.trackpoint)
+    }
+
+    pub fn trackball_for_device(&self, name: &str, sysname: Option<&str>) -> &Trackball {
+        find_named_config(&self.trackballs, name, sysname, |config| {
+            config.name.as_deref()
+        })
+        .unwrap_or(&self.trackball)
+    }
+
+    pub fn tablet_for_device(&self, name: &str, sysname: Option<&str>) -> &Tablet {
+        find_named_config(&self.tablets, name, sysname, |config| {
+            config.name.as_deref()
+        })
+        .unwrap_or(&self.tablet)
+    }
+
+    pub fn touch_for_device(&self, name: &str, sysname: Option<&str>) -> &Touch {
+        find_named_config(&self.touch_devices, name, sysname, |config| {
+            config.name.as_deref()
+        })
+        .unwrap_or(&self.touch)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keyboard {
+    pub name: Option<String>,
     pub xkb: Xkb,
     pub repeat_delay: u16,
     pub repeat_rate: u8,
@@ -96,6 +198,7 @@ pub struct Keyboard {
 impl Default for Keyboard {
     fn default() -> Self {
         Self {
+            name: None,
             xkb: Default::default(),
             // The defaults were chosen to match wlroots and sway.
             repeat_delay: 600,
@@ -108,6 +211,8 @@ impl Default for Keyboard {
 
 #[derive(knuffel::Decode, Debug, PartialEq, Eq)]
 pub struct KeyboardPart {
+    #[knuffel(argument)]
+    pub name: Option<String>,
     #[knuffel(child)]
     pub xkb: Option<Xkb>,
     #[knuffel(child, unwrap(argument))]
@@ -122,6 +227,9 @@ pub struct KeyboardPart {
 
 impl MergeWith<KeyboardPart> for Keyboard {
     fn merge_with(&mut self, part: &KeyboardPart) {
+        if part.name.is_some() {
+            self.name.clone_from(&part.name);
+        }
         merge_clone!((self, part), xkb, repeat_delay, repeat_rate, track_layout);
         merge!((self, part), numlock);
     }
@@ -185,6 +293,8 @@ impl ScrollFactor {
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct Touchpad {
+    #[knuffel(argument)]
+    pub name: Option<String>,
     #[knuffel(child)]
     pub off: bool,
     #[knuffel(child)]
@@ -225,6 +335,8 @@ pub struct Touchpad {
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct Mouse {
+    #[knuffel(argument)]
+    pub name: Option<String>,
     #[knuffel(child)]
     pub off: bool,
     #[knuffel(child)]
@@ -249,6 +361,8 @@ pub struct Mouse {
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct Trackpoint {
+    #[knuffel(argument)]
+    pub name: Option<String>,
     #[knuffel(child)]
     pub off: bool,
     #[knuffel(child)]
@@ -271,6 +385,8 @@ pub struct Trackpoint {
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct Trackball {
+    #[knuffel(argument)]
+    pub name: Option<String>,
     #[knuffel(child)]
     pub off: bool,
     #[knuffel(child)]
@@ -357,6 +473,8 @@ impl From<TapButtonMap> for input::TapButtonMap {
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct Tablet {
+    #[knuffel(argument)]
+    pub name: Option<String>,
     #[knuffel(child)]
     pub off: bool,
     #[knuffel(child, unwrap(arguments))]
@@ -373,37 +491,14 @@ pub struct Tablet {
 
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq)]
 pub struct Touch {
+    #[knuffel(argument)]
+    pub name: Option<String>,
     #[knuffel(child)]
     pub off: bool,
     #[knuffel(child, unwrap(arguments))]
     pub calibration_matrix: Option<Vec<f32>>,
     #[knuffel(child, unwrap(argument))]
     pub map_to_output: Option<String>,
-    #[knuffel(children(name = "device"))]
-    pub devices: Vec<TouchDevice>,
-}
-
-impl Touch {
-    pub fn map_to_output_for_device(&self, name: &str, sysname: &str) -> Option<&str> {
-        self.devices
-            .iter()
-            .find(|device| device.matches(name, sysname))
-            .map(|device| device.map_to_output.as_str())
-    }
-}
-
-#[derive(knuffel::Decode, Debug, Clone, PartialEq)]
-pub struct TouchDevice {
-    #[knuffel(argument)]
-    pub name: String,
-    #[knuffel(child, unwrap(argument))]
-    pub map_to_output: String,
-}
-
-impl TouchDevice {
-    pub fn matches(&self, name: &str, sysname: &str) -> bool {
-        self.name == name || self.name == sysname
-    }
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]
@@ -550,45 +645,108 @@ mod tests {
     }
 
     #[test]
-    fn parse_per_touch_device_output_mapping() {
+    fn parse_per_device_input_blocks() {
         let parsed = do_parse(
             r#"
+            keyboard "AT Translated Set 2 keyboard" {
+                repeat-delay 300
+                xkb {
+                    layout "us(colemak)"
+                }
+            }
+
+            mouse "Gaming Mouse" {
+                accel-speed -0.5
+                scroll-factor 2.0
+            }
+
+            touchpad "event7" {
+                tap
+            }
+
+            tablet "Wacom Pen" {
+                map-to-output "DP-1"
+            }
+
             touch {
                 map-to-output "eDP-1"
+            }
 
-                device "Wacom HID 5218 Finger" {
-                    map-to-output "HDMI-A-1"
-                }
+            touch "Wacom HID 5218 Finger" {
+                map-to-output "HDMI-A-1"
             }
             "#,
         );
 
         assert_eq!(
             parsed
-                .touch
-                .map_to_output_for_device("Wacom HID 5218 Finger", "event12"),
+                .keyboard_for_device("AT Translated Set 2 keyboard", None)
+                .xkb
+                .layout,
+            "us(colemak)"
+        );
+        assert_eq!(
+            parsed
+                .mouse_for_device("Gaming Mouse", None)
+                .scroll_factor
+                .unwrap()
+                .h_v_factors(),
+            (2.0, 2.0)
+        );
+        assert!(
+            parsed
+                .touchpad_for_device("Other Touchpad", Some("event7"))
+                .tap
+        );
+        assert_eq!(
+            parsed
+                .tablet_for_device("Wacom Pen", None)
+                .map_to_output
+                .as_deref(),
+            Some("DP-1")
+        );
+        assert_eq!(
+            parsed
+                .touch_for_device("Wacom HID 5218 Finger", Some("event12"))
+                .map_to_output
+                .as_deref(),
             Some("HDMI-A-1")
         );
         assert_eq!(
             parsed
-                .touch
-                .map_to_output_for_device("Other Touchscreen", "event12"),
-            None
+                .touch_for_device("Other Touchscreen", Some("event12"))
+                .map_to_output
+                .as_deref(),
+            Some("eDP-1")
         );
     }
 
     #[test]
-    fn per_touch_device_output_mapping_matches_sysname() {
-        let touch = Touch {
-            devices: vec![TouchDevice {
-                name: "event12".to_owned(),
-                map_to_output: "DP-1".to_owned(),
+    fn per_device_matching_is_case_insensitive_and_matches_sysname() {
+        let input = Input {
+            mice: vec![Mouse {
+                name: Some("Gaming Mouse".to_owned()),
+                left_handed: true,
+                ..Default::default()
+            }],
+            touch_devices: vec![Touch {
+                name: Some("event12".to_owned()),
+                map_to_output: Some("DP-1".to_owned()),
+                ..Default::default()
             }],
             ..Default::default()
         };
 
+        assert!(
+            input
+                .mouse_for_device("gaming mouse", Some("event7"))
+                .left_handed
+        );
         assert_eq!(
-            touch.map_to_output_for_device("Other Touchscreen", "event12"),
+            input
+                .touch_for_device("Other Touchscreen", Some("event12"))
+                .map_to_output
+                .as_deref(),
             Some("DP-1")
         );
     }
