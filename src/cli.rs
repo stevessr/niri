@@ -147,6 +147,51 @@ pub enum MiracastCommand {
         #[arg(short, long)]
         json: bool,
     },
+    /// Run a Wi-Fi Display RTSP source and stream the current Wayland output.
+    Serve {
+        /// Address to listen on for the sink RTSP connection.
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
+        /// RTSP port to listen on.
+        #[arg(long, default_value_t = 7236)]
+        port: u16,
+        /// Stop waiting for the sink after this many seconds; 0 means forever.
+        #[arg(long, default_value_t = 0)]
+        accept_timeout: u64,
+        /// Stop a connected RTSP session after this many idle seconds; 0 means forever.
+        #[arg(long, default_value_t = 0)]
+        session_timeout: u64,
+        /// niri output name to capture with wf-recorder.
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Video framerate to request from wf-recorder.
+        #[arg(short, long, default_value_t = 30)]
+        framerate: u32,
+        /// Video bitrate to request from wf-recorder, in kbit/s.
+        #[arg(long, default_value_t = 8000)]
+        bitrate_kbps: u32,
+        /// Video codec to request from wf-recorder.
+        #[arg(long, default_value = "libx264")]
+        codec: String,
+        /// Include audio using wf-recorder's default audio source.
+        #[arg(long)]
+        audio: bool,
+        /// Include audio from the specified PipeWire/Pulse source.
+        #[arg(long, conflicts_with = "audio")]
+        audio_device: Option<String>,
+        /// Do the RTSP handshake but do not launch wf-recorder.
+        #[arg(long)]
+        no_media: bool,
+        /// Override the selected WFD H.264 video format string.
+        #[arg(
+            long,
+            default_value = "00 00 01 01 00000020 00000000 00000000 00 0000 0000 00 none none"
+        )]
+        video_formats: String,
+        /// Print machine-readable JSON after the session ends.
+        #[arg(short, long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
