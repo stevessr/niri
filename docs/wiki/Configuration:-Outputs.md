@@ -355,10 +355,47 @@ The reported information includes:
 
 These fields are also present in the JSON IPC output as `hdr_capabilities`.
 
-This is capability discovery only. HDR composition is not enabled yet: applications are still
-composited through niri's existing SDR path, and niri continues to reset stale HDR connector
-metadata. A future HDR mode must perform the actual transfer-function/gamut conversion (and disable
-unsafe direct scanout paths) before setting HDR connector signalling.
+### Experimental HDR10 output
+
+HDR10 output can be enabled explicitly per output:
+
+```kdl
+output "DP-1" {
+    hdr sdr-white-nits=203
+}
+```
+
+The `hdr` node is fail-closed. Niri enables it only when all of the following are true:
+
+- the EDID advertises PQ, Static Metadata Type 1 and BT.2020 RGB or YCC;
+- DRM exposes `HDR_OUTPUT_METADATA` and a BT.2020 RGB/YCC `Colorspace` value;
+- the connector's `max bpc` property supports at least 10 bpc;
+- the DRM compositor actually selected the 10-bit `ABGR2101010` swapchain format.
+
+When enabled, niri forces compositor rendering (primary/overlay/cursor direct scanout is disabled),
+captures the full output into a 10-bit intermediate texture, decodes SDR sRGB to linear light,
+converts Rec.709 primaries to BT.2020, maps SDR diffuse white to `sdr-white-nits` (203 nits by
+default), and encodes the result with SMPTE ST 2084 (PQ). It then programs BT.2020 and
+`HDR_OUTPUT_METADATA` on the connector in the same output mode.
+
+This first HDR path maps the existing SDR compositor scene into an HDR10 container; native HDR
+Wayland client content is not accepted yet. Full client color management still requires
+`color-management-v1` image-description handling and per-surface transforms.
+
+ICC `vcgt` calibration and the wlr gamma-control protocol are suspended while HDR is active,
+because a downstream hardware gamma ramp would corrupt the PQ transfer function. They are restored
+when HDR is disabled.
+
+Runtime control is also available:
+
+```sh
+niri msg output DP-1 hdr on
+niri msg output DP-1 hdr on --sdr-white-nits 203
+niri msg output DP-1 hdr off
+```
+
+Use `niri msg outputs` to inspect `HDR output`, sink capabilities, DRM BT.2020 signalling and
+the connector's maximum BPC before enabling it.
 
 ### `hot-corners`
 
