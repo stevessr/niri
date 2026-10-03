@@ -112,6 +112,7 @@ impl Headless {
                 logical: Some(logical_output(&output)),
                 max_bpc: None,
                 icc_profile: None,
+                hdr_capabilities: None,
             },
         );
 
