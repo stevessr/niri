@@ -108,6 +108,7 @@ impl Winit {
                 max_bpc: None,
                 icc_profile: None,
                 hdr_capabilities: None,
+                hdr_enabled: false,
             },
         )])));
 
