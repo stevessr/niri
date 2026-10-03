@@ -733,6 +733,16 @@ impl GammaControlHandler for State {
     }
 
     fn get_gamma_size(&mut self, output: &Output) -> Option<u32> {
+        if self
+            .niri
+            .output_state
+            .get(output)
+            .is_some_and(|state| state.color_transform_active)
+        {
+            // Gamma LUTs are downstream from the HDR compositor transform and would corrupt PQ.
+            return None;
+        }
+
         match self.backend.tty().get_gamma_size(output) {
             Ok(0) => None, // Setting gamma is not supported.
             Ok(size) => Some(size),
@@ -747,6 +757,25 @@ impl GammaControlHandler for State {
     }
 
     fn set_gamma(&mut self, output: &Output, ramp: Option<Vec<u16>>) -> Option<()> {
+        let hdr_active = self
+            .niri
+            .output_state
+            .get(output)
+            .is_some_and(|state| state.color_transform_active);
+
+        if hdr_active {
+            return match self.backend.tty().set_gamma(output, None) {
+                Ok(()) => Some(()),
+                Err(err) => {
+                    warn!(
+                        "error keeping linear gamma for HDR output {}: {err:?}",
+                        output.name()
+                    );
+                    None
+                }
+            };
+        }
+
         if let Some(ramp) = ramp {
             return match self.backend.tty().set_gamma(output, Some(ramp)) {
                 Ok(()) => Some(()),
