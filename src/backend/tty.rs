@@ -456,6 +456,9 @@ struct DrmHdrOutputMetadata {
     padding: [u8; 2],
 }
 
+const _: [(); 26] = [(); std::mem::size_of::<DrmHdrMetadataInfoframe>()];
+const _: [(); 32] = [(); std::mem::size_of::<DrmHdrOutputMetadata>()];
+
 impl Tty {
     pub fn new(
         config: Rc<RefCell<Config>>,
