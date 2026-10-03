@@ -2301,6 +2301,15 @@ impl Tty {
                     max_bpc,
                     icc_profile: None,
                     hdr_capabilities: Some(hdr_capabilities),
+                    hdr_enabled: niri
+                        .global_space
+                        .outputs()
+                        .find(|output| {
+                            let tty_state: &TtyOutputState = output.user_data().get().unwrap();
+                            tty_state.node == *node && tty_state.crtc == crtc
+                        })
+                        .and_then(|output| niri.output_state.get(output))
+                        .is_some_and(|state| state.color_transform_active),
                 };
 
                 ipc_outputs.insert(id, ipc_output);
