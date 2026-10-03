@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
-use smithay::backend::input::{InputEvent, TabletToolDescriptor};
+use smithay::backend::input::TabletToolDescriptor;
 use smithay::desktop::{PopupKind, PopupManager};
 use smithay::input::dnd::{self, DnDGrab, DndGrabHandler, DndTarget};
 use smithay::input::pointer::{self, CursorIcon, CursorImageStatus, Focus, PointerHandle};
