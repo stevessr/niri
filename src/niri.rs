@@ -3194,21 +3194,35 @@ impl Niri {
     /// The TTY backend observes this state to disable all DRM plane scanout paths that could
     /// bypass the transform.
     pub fn set_output_hdr_transform(&mut self, output: &Output, sdr_white_nits: Option<f32>) {
-        let Some(state) = self.output_state.get_mut(output) else {
-            return;
-        };
-
         let active = sdr_white_nits.is_some();
         let white = sdr_white_nits.unwrap_or(203.).clamp(80., 500.);
-        if state.color_transform_active == active
-            && (!active || state.color_transform_sdr_white_nits == white)
-        {
+
+        let changed = {
+            let Some(state) = self.output_state.get_mut(output) else {
+                return;
+            };
+            if state.color_transform_active == active
+                && (!active || state.color_transform_sdr_white_nits == white)
+            {
+                false
+            } else {
+                state.color_transform_active = active;
+                state.color_transform_sdr_white_nits = white;
+                state.color_transform_effect.damage();
+                true
+            }
+        };
+
+        if !changed {
             return;
         }
 
-        state.color_transform_active = active;
-        state.color_transform_sdr_white_nits = white;
-        state.color_transform_effect.damage();
+        if active {
+            // Gamma ramps operate after the compositor transform and would corrupt PQ. Force any
+            // existing gamma-control client to relinquish this output while HDR is active.
+            self.gamma_control_manager_state.output_removed(output);
+        }
+
         self.queue_redraw(output);
     }
 
