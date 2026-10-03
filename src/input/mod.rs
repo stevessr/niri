@@ -31,7 +31,7 @@ use smithay::input::tablet::{TabletDescriptor, TabletSeatHandler, TabletSeatTrai
 use smithay::input::touch::{
     DownEvent, GrabStartData as TouchGrabStartData, MotionEvent as TouchMotionEvent, UpEvent,
 };
-use smithay::input::{tablet, SeatHandler};
+use smithay::input::{tablet, Seat, SeatHandler};
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -50,6 +50,10 @@ use crate::dbus::freedesktop_a11y::KbMonBlock;
 use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
 use crate::niri::{CastTarget, PointerVisibility, State};
+use crate::protocols::virtual_pointer::{
+    VirtualPointer, VirtualPointerAxisEvent, VirtualPointerButtonEvent, VirtualPointerInputBackend,
+    VirtualPointerMotionAbsoluteEvent, VirtualPointerMotionEvent,
+};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
@@ -298,6 +302,228 @@ impl State {
             }
             _ => (),
         }
+    }
+
+    fn virtual_pointer_agent_seat(
+        &self,
+        device: &VirtualPointer,
+    ) -> Option<Seat<State>> {
+        let wl_seat = device.seat()?;
+        self.niri
+            .agent_seats
+            .iter()
+            .find(|seat| seat.owns(wl_seat))
+            .cloned()
+    }
+
+    /// Route a standard zwlr_virtual_pointer_v1 motion event either through the
+    /// existing primary input pipeline or through an isolated agent seat.
+    pub fn process_virtual_pointer_motion(&mut self, event: VirtualPointerMotionEvent) {
+        let device = event.device();
+        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+            if self.niri.agent_input_allowed() {
+                self.on_agent_pointer_motion(&seat, event);
+            }
+            return;
+        }
+
+        self.process_input_event(InputEvent::<VirtualPointerInputBackend>::PointerMotion { event });
+    }
+
+    pub fn process_virtual_pointer_motion_absolute(
+        &mut self,
+        event: VirtualPointerMotionAbsoluteEvent,
+    ) {
+        let device = event.device();
+        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+            if self.niri.agent_input_allowed() {
+                self.on_agent_pointer_motion_absolute(&seat, event);
+            }
+            return;
+        }
+
+        self.process_input_event(
+            InputEvent::<VirtualPointerInputBackend>::PointerMotionAbsolute { event },
+        );
+    }
+
+    pub fn process_virtual_pointer_button(&mut self, event: VirtualPointerButtonEvent) {
+        let device = event.device();
+        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+            if self.niri.agent_input_allowed() {
+                self.on_agent_pointer_button(&seat, event);
+            }
+            return;
+        }
+
+        self.process_input_event(InputEvent::<VirtualPointerInputBackend>::PointerButton { event });
+    }
+
+    pub fn process_virtual_pointer_axis(&mut self, event: VirtualPointerAxisEvent) {
+        let device = event.device();
+        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+            if self.niri.agent_input_allowed() {
+                self.on_agent_pointer_axis(&seat, event);
+            }
+            return;
+        }
+
+        self.process_input_event(InputEvent::<VirtualPointerInputBackend>::PointerAxis { event });
+    }
+
+    fn constrain_agent_pointer_location(
+        &self,
+        previous: Point<f64, Logical>,
+        mut next: Point<f64, Logical>,
+    ) -> Point<f64, Logical> {
+        if self.niri.global_space.output_under(next).next().is_some() {
+            return next;
+        }
+
+        if let Some(output) = self.niri.global_space.output_under(previous).next() {
+            let geom = self.niri.global_space.output_geometry(output).unwrap();
+            next.x = next
+                .x
+                .clamp(geom.loc.x as f64, (geom.loc.x + geom.size.w - 1) as f64);
+            next.y = next
+                .y
+                .clamp(geom.loc.y as f64, (geom.loc.y + geom.size.h - 1) as f64);
+            return next;
+        }
+
+        self.niri
+            .global_space
+            .outputs()
+            .next()
+            .and_then(|output| self.niri.global_space.output_geometry(output))
+            .map(|geom| center(geom).to_f64())
+            .unwrap_or(previous)
+    }
+
+    fn on_agent_pointer_motion(
+        &mut self,
+        seat: &Seat<State>,
+        event: VirtualPointerMotionEvent,
+    ) {
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
+
+        let previous = pointer.current_location();
+        let next = self.constrain_agent_pointer_location(previous, previous + event.delta());
+        let under = self.niri.contents_under(next);
+        let serial = SERIAL_COUNTER.next_serial();
+
+        pointer.motion(
+            self,
+            under.surface.clone(),
+            &MotionEvent {
+                location: next,
+                serial,
+                time: event.time_msec(),
+            },
+        );
+        pointer.relative_motion(
+            self,
+            under.surface,
+            &RelativeMotionEvent {
+                delta: event.delta(),
+                delta_unaccel: event.delta_unaccel(),
+                time: event.time(),
+            },
+        );
+        pointer.frame(self);
+    }
+
+    fn on_agent_pointer_motion_absolute(
+        &mut self,
+        seat: &Seat<State>,
+        event: VirtualPointerMotionAbsoluteEvent,
+    ) {
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
+
+        let Some(pos) = self.compute_absolute_location(&event, None).or_else(|| {
+            self.global_bounding_rectangle().map(|output_geo| {
+                event.position_transformed(output_geo.size) + output_geo.loc.to_f64()
+            })
+        }) else {
+            return;
+        };
+        let pos = self.constrain_agent_pointer_location(pointer.current_location(), pos);
+        let under = self.niri.contents_under(pos);
+        let serial = SERIAL_COUNTER.next_serial();
+
+        pointer.motion(
+            self,
+            under.surface,
+            &MotionEvent {
+                location: pos,
+                serial,
+                time: event.time_msec(),
+            },
+        );
+        pointer.frame(self);
+    }
+
+    fn on_agent_pointer_button(
+        &mut self,
+        seat: &Seat<State>,
+        event: VirtualPointerButtonEvent,
+    ) {
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+
+        // Clicking with an isolated pointer may move only that seat's keyboard
+        // focus. The compositor's layout focus and primary seat remain unchanged.
+        if event.state() == ButtonState::Pressed {
+            if let (Some(keyboard), Some(focus)) = (seat.get_keyboard(), pointer.current_focus()) {
+                keyboard.set_focus(self, Some(focus), serial);
+            }
+        }
+
+        pointer.button(
+            self,
+            &ButtonEvent {
+                button: event.button_code(),
+                state: event.state(),
+                serial,
+                time: event.time_msec(),
+            },
+        );
+        pointer.frame(self);
+    }
+
+    fn on_agent_pointer_axis(&mut self, seat: &Seat<State>, event: VirtualPointerAxisEvent) {
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
+
+        let source = event.source();
+        let mut frame = AxisFrame::new(event.time()).source(source);
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            let amount = event.amount(axis).unwrap_or(0.0);
+            if amount != 0.0 {
+                frame = frame
+                    .relative_direction(axis, event.relative_direction(axis))
+                    .value(axis, amount);
+                if let Some(v120) = event.amount_v120(axis) {
+                    frame = frame.v120(axis, v120 as i32);
+                }
+            }
+
+            if matches!(source, AxisSource::Finger | AxisSource::Continuous)
+                && event.amount(axis) == Some(0.0)
+            {
+                frame = frame.stop(axis);
+            }
+        }
+
+        pointer.axis(self, frame);
+        pointer.frame(self);
     }
 
     fn on_device_added(&mut self, device: impl Device) {

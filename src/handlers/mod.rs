@@ -23,9 +23,10 @@ use smithay::output::Output;
 use smithay::reexports::rustix::fs::{fcntl_setfl, OFlags};
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Point, Rectangle, Serial};
+use smithay::utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::compositor::{get_parent, with_states};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::drm_lease::{
@@ -80,7 +81,7 @@ use crate::protocols::output_management::{OutputManagementHandler, OutputManagem
 use crate::protocols::screencopy::{Screencopy, ScreencopyHandler, ScreencopyManagerState};
 use crate::protocols::virtual_pointer::{
     VirtualPointerAxisEvent, VirtualPointerButtonEvent, VirtualPointerHandler,
-    VirtualPointerInputBackend, VirtualPointerManagerState, VirtualPointerMotionAbsoluteEvent,
+    VirtualPointerManagerState, VirtualPointerMotionAbsoluteEvent,
     VirtualPointerMotionEvent,
 };
 use crate::utils::{output_size, send_scale_transform};
@@ -96,7 +97,18 @@ impl SeatHandler for State {
         &mut self.niri.seat_state
     }
 
-    fn cursor_image(&mut self, _seat: &Seat<Self>, mut image: CursorImageStatus) {
+    fn cursor_image(&mut self, seat: &Seat<Self>, mut image: CursorImageStatus) {
+        // Agent pointers are deliberately not rendered as the user's hardware cursor.
+        // A client changing the cursor shape on a background seat must therefore not
+        // mutate the primary cursor manager.
+        if self
+            .niri
+            .agent_seats
+            .iter()
+            .any(|agent| agent.get_pointer() == seat.get_pointer())
+        {
+            return;
+        }
         // FIXME: this hack should be removable once the screenshot UI is tracked with a
         // PointerFocus properly.
         if self.niri.screenshot_ui.is_open() {
@@ -114,7 +126,16 @@ impl SeatHandler for State {
         set_primary_focus(dh, seat, client);
     }
 
-    fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: keyboard::LedState) {
+    fn led_state_changed(&mut self, seat: &Seat<Self>, led_state: keyboard::LedState) {
+        // Synthetic keyboards must not toggle LEDs on physical keyboards.
+        if self
+            .niri
+            .agent_seats
+            .iter()
+            .any(|agent| agent.get_keyboard() == seat.get_keyboard())
+        {
+            return;
+        }
         let keyboards = self
             .niri
             .devices
@@ -462,6 +483,30 @@ impl SessionLockHandler for State {
     }
 
     fn lock(&mut self, confirmation: SessionLocker) {
+        // Drop every background keyboard focus before entering the lock
+        // transition. zwp_virtual_keyboard_v1 is dispatched by Smithay directly,
+        // so clearing focus here is the fail-closed boundary for already-created
+        // virtual keyboard objects.
+        let serial = SERIAL_COUNTER.next_serial();
+        for seat in self.niri.agent_seats.clone() {
+            if let Some(keyboard) = seat.get_keyboard() {
+                keyboard.set_focus(self, None, serial);
+            }
+            if let Some(pointer) = seat.get_pointer() {
+                let location = pointer.current_location();
+                pointer.motion(
+                    self,
+                    None,
+                    &pointer::MotionEvent {
+                        location,
+                        serial,
+                        time: 0,
+                    },
+                );
+                pointer.frame(self);
+            }
+        }
+
         self.niri.lock(confirmation);
     }
 
@@ -533,13 +578,50 @@ impl ForeignToplevelHandler for State {
         &mut self.niri.foreign_toplevel_state
     }
 
-    fn activate(&mut self, wl_surface: WlSurface) {
+    fn activate(&mut self, wl_surface: WlSurface, wl_seat: WlSeat) -> bool {
+        // wlr-foreign-toplevel carries the requesting wl_seat. Honor that seat
+        // instead of collapsing every activation onto the physical/user seat.
+        //
+        // For an agent seat, activation means "give this seat keyboard focus"
+        // only: do not raise the window, switch workspaces, or mutate niri's
+        // primary layout focus. This is the Wayland analogue of X11 multi-pointer
+        // focus and the isolated lanes used by CUA's Hyprland plugin.
+        if let Some(agent_seat) = self
+            .niri
+            .agent_seats
+            .iter()
+            .find(|seat| seat.owns(&wl_seat))
+            .cloned()
+        {
+            if !self.niri.agent_input_allowed()
+                || self.niri.layout.find_window_and_output(&wl_surface).is_none()
+            {
+                return false;
+            }
+
+            if let Some(keyboard) = agent_seat.get_keyboard() {
+                keyboard.set_focus(self, Some(wl_surface), SERIAL_COUNTER.next_serial());
+                // Tell the protocol dispatcher that this was an isolated
+                // activation so it can acknowledge activation only to the
+                // requesting management client.
+                return true;
+            }
+            return false;
+        }
+
+        // Reject a seat resource that is neither one of our agent seats nor the
+        // primary seat instead of silently upgrading it to primary focus.
+        if !self.niri.seat.owns(&wl_seat) {
+            return false;
+        }
+
         if let Some((mapped, _)) = self.niri.layout.find_window_and_output(&wl_surface) {
             let window = mapped.window.clone();
             self.niri.layout.activate_window(&window);
             self.niri.layer_shell_on_demand_focus = None;
             self.niri.queue_redraw_all();
         }
+        false
     }
 
     fn close(&mut self, wl_surface: WlSurface) {
@@ -662,21 +744,19 @@ impl VirtualPointerHandler for State {
     }
 
     fn on_virtual_pointer_motion(&mut self, event: VirtualPointerMotionEvent) {
-        self.process_input_event(InputEvent::<VirtualPointerInputBackend>::PointerMotion { event });
+        self.process_virtual_pointer_motion(event);
     }
 
     fn on_virtual_pointer_motion_absolute(&mut self, event: VirtualPointerMotionAbsoluteEvent) {
-        self.process_input_event(
-            InputEvent::<VirtualPointerInputBackend>::PointerMotionAbsolute { event },
-        );
+        self.process_virtual_pointer_motion_absolute(event);
     }
 
     fn on_virtual_pointer_button(&mut self, event: VirtualPointerButtonEvent) {
-        self.process_input_event(InputEvent::<VirtualPointerInputBackend>::PointerButton { event });
+        self.process_virtual_pointer_button(event);
     }
 
     fn on_virtual_pointer_axis(&mut self, event: VirtualPointerAxisEvent) {
-        self.process_input_event(InputEvent::<VirtualPointerInputBackend>::PointerAxis { event });
+        self.process_virtual_pointer_axis(event);
     }
 }
 

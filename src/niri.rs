@@ -345,6 +345,12 @@ pub struct Niri {
     pub single_pixel_buffer_state: SinglePixelBufferState,
 
     pub seat: Seat<State>,
+    /// Synthetic seats used by background computer-use agents.
+    ///
+    /// Each seat owns an independent pointer and keyboard focus. They are intentionally
+    /// separate from the physical/user seat so virtual input can target a client without
+    /// moving the user's cursor or changing the layout keyboard focus.
+    pub agent_seats: Vec<Seat<State>>,
     /// Scancodes of the keys to suppress.
     pub suppressed_keys: HashSet<Keycode>,
     /// Button codes of the mouse buttons to suppress.
@@ -2653,6 +2659,53 @@ impl Niri {
         }
         seat.add_pointer();
 
+        // Expose a small pool of independent Wayland seats for background computer-use
+        // agents. Keeping these as real wl_seat globals means standard
+        // zwlr_virtual_pointer_v1 and zwp_virtual_keyboard_v1 clients can opt into
+        // isolated focus without a compositor-private input protocol.
+        //
+        // Two seats mirrors CUA's current Hyprland isolated-input lane count. The
+        // environment override is primarily useful for tests and deployments that need
+        // either no agent seats or a larger fixed pool.
+        const DEFAULT_AGENT_SEAT_COUNT: usize = 2;
+        const MAX_AGENT_SEAT_COUNT: usize = 8;
+        let agent_seat_count = std::env::var("NIRI_AGENT_SEATS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_AGENT_SEAT_COUNT)
+            .min(MAX_AGENT_SEAT_COUNT);
+        let mut agent_seats = Vec::with_capacity(agent_seat_count);
+        for idx in 0..agent_seat_count {
+            let mut agent_seat = seat_state.new_wl_seat(
+                &display_handle,
+                format!("niri-agent-{}", idx + 1),
+            );
+            let agent_keyboard = match agent_seat.add_keyboard(
+                fallback_keyboard.xkb.to_xkb_config(),
+                fallback_keyboard.repeat_delay.into(),
+                fallback_keyboard.repeat_rate.into(),
+            ) {
+                Err(err) => {
+                    warn!("error adding keyboard for agent seat {}: {err:?}", idx + 1);
+                    agent_seat
+                        .add_keyboard(
+                            Default::default(),
+                            fallback_keyboard.repeat_delay.into(),
+                            fallback_keyboard.repeat_rate.into(),
+                        )
+                        .unwrap()
+                }
+                Ok(keyboard) => keyboard,
+            };
+            if fallback_keyboard.numlock {
+                let mut modifier_state = agent_keyboard.modifier_state();
+                modifier_state.num_lock = true;
+                agent_keyboard.set_modifier_state(modifier_state);
+            }
+            agent_seat.add_pointer();
+            agent_seats.push(agent_seat);
+        }
+
         let cursor_shape_manager_state = CursorShapeManagerState::new::<State>(&display_handle);
         let cursor_manager =
             CursorManager::new(&config_.cursor.xcursor_theme, config_.cursor.xcursor_size);
@@ -2827,6 +2880,7 @@ impl Niri {
             single_pixel_buffer_state,
 
             seat,
+            agent_seats,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
@@ -6545,6 +6599,14 @@ impl Niri {
             LockState::Unlocked | LockState::WaitingForSurfaces { .. } => false,
             LockState::Locking(_) | LockState::Locked(_) => true,
         }
+    }
+
+    /// Background synthetic input is only permitted while the session is fully
+    /// unlocked. In particular, the pre-lock WaitingForSurfaces transition is
+    /// treated as closed to agents so a virtual keyboard cannot retain a target
+    /// across a lock boundary.
+    pub fn agent_input_allowed(&self) -> bool {
+        matches!(self.lock_state, LockState::Unlocked)
     }
 
     pub fn lock(&mut self, confirmation: SessionLocker) {

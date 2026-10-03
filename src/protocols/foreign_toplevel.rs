@@ -13,6 +13,7 @@ use smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::{
 };
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
@@ -39,7 +40,13 @@ pub struct ForeignToplevelManagerState {
 
 pub trait ForeignToplevelHandler {
     fn foreign_toplevel_manager_state(&mut self) -> &mut ForeignToplevelManagerState;
-    fn activate(&mut self, wl_surface: WlSurface);
+    /// Activate a toplevel for the requesting seat.
+    ///
+    /// Returns true when the activation was handled as an isolated, non-primary
+    /// seat activation. The protocol layer uses that result to send a
+    /// requester-local Activated acknowledgement without changing the global
+    /// primary-focus state advertised to unrelated clients.
+    fn activate(&mut self, wl_surface: WlSurface, seat: WlSeat) -> bool;
     fn close(&mut self, wl_surface: WlSurface);
     fn set_fullscreen(&mut self, wl_surface: WlSurface, wl_output: Option<WlOutput>);
     fn unset_fullscreen(&mut self, wl_surface: WlSurface);
@@ -573,8 +580,27 @@ where
             }
             zwlr_foreign_toplevel_handle_v1::Request::SetMinimized => (),
             zwlr_foreign_toplevel_handle_v1::Request::UnsetMinimized => (),
-            zwlr_foreign_toplevel_handle_v1::Request::Activate { .. } => {
-                state.activate(surface);
+            zwlr_foreign_toplevel_handle_v1::Request::Activate { seat } => {
+                let isolated = state.activate(surface.clone(), seat);
+                if isolated {
+                    // The target is active for this agent seat, but the user's
+                    // primary keyboard focus intentionally did not move. Send a
+                    // client-local read-back acknowledgement so clients such as
+                    // CUA, which verify wlr-foreign-toplevel activation before
+                    // opening a virtual keyboard, can proceed without forcing
+                    // primary focus.
+                    let protocol_state = state.foreign_toplevel_manager_state();
+                    if let Some(data) = protocol_state.toplevels.get(&surface) {
+                        let mut states = data.states.clone();
+                        let activated =
+                            zwlr_foreign_toplevel_handle_v1::State::Activated as u32;
+                        if !states.contains(&activated) {
+                            states.push(activated);
+                        }
+                        resource.state(states.iter().flat_map(|x| x.to_ne_bytes()).collect());
+                        resource.done();
+                    }
+                }
             }
             zwlr_foreign_toplevel_handle_v1::Request::Close => {
                 state.close(surface);
