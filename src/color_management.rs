@@ -335,6 +335,7 @@ fn edid_block_checksum_valid(block: &[u8]) -> bool {
     block.len() == 128 && block.iter().fold(0u8, |sum, value| sum.wrapping_add(*value)) == 0
 }
 
+#[cfg(test)]
 fn update_edid_checksum(block: &mut [u8]) {
     debug_assert_eq!(block.len(), 128);
     let sum = block[..127]
