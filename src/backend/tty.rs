@@ -759,7 +759,13 @@ impl Tty {
                                 config.max_bpc,
                                 hdr,
                             ) {
-                                Ok(white) => Some(white),
+                                Ok((white, previous_max_bpc)) => {
+                                    if !surface.hdr_enabled {
+                                        surface.hdr_restore_max_bpc = previous_max_bpc;
+                                    }
+                                    surface.hdr_enabled = true;
+                                    Some(white)
+                                }
                                 Err(err) => {
                                     warn!(
                                         "output {:?}: cannot restore experimental HDR10 after resume: {err:?}; keeping SDR",
@@ -769,12 +775,14 @@ impl Tty {
                                         &device.drm,
                                         surface.connector,
                                         config.max_bpc,
+                                        surface.hdr_restore_max_bpc.take(),
                                     ) {
                                         warn!(
                                             "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
                                             surface.name.connector
                                         );
                                     }
+                                    surface.hdr_enabled = false;
                                     None
                                 }
                             }
@@ -783,12 +791,14 @@ impl Tty {
                                 &device.drm,
                                 surface.connector,
                                 config.max_bpc,
+                                surface.hdr_restore_max_bpc.take(),
                             ) {
                                 warn!(
                                     "output {:?}: failed to restore SDR connector properties: {err:?}",
                                     surface.name.connector
                                 );
                             }
+                            surface.hdr_enabled = false;
                             None
                         };
 
@@ -1627,37 +1637,41 @@ impl Tty {
 
         let vrr_enabled = compositor.vrr_enabled();
 
-        let hdr_sdr_white_nits = if let Some(hdr) = config.hdr.as_ref() {
-            match enable_hdr10_connector(
-                &device.drm,
-                connector.handle(),
-                compositor.format(),
-                config.max_bpc,
-                hdr,
-            ) {
-                Ok(white) => {
-                    info!(
-                        "output {connector_name:?}: enabling experimental HDR10 output, SDR white {white:.1} nits"
-                    );
-                    Some(white)
-                }
-                Err(err) => {
-                    warn!(
-                        "output {connector_name:?}: cannot enable experimental HDR10: {err:?}; keeping SDR"
-                    );
-                    if let Err(reset_err) =
-                        disable_hdr_connector(&device.drm, connector.handle(), config.max_bpc)
-                    {
-                        warn!(
-                            "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
+        let (hdr_sdr_white_nits, hdr_restore_max_bpc) =
+            if let Some(hdr) = config.hdr.as_ref() {
+                match enable_hdr10_connector(
+                    &device.drm,
+                    connector.handle(),
+                    compositor.format(),
+                    config.max_bpc,
+                    hdr,
+                ) {
+                    Ok((white, previous_max_bpc)) => {
+                        info!(
+                            "output {connector_name:?}: enabling experimental HDR10 output, SDR white {white:.1} nits"
                         );
+                        (Some(white), previous_max_bpc)
                     }
-                    None
+                    Err(err) => {
+                        warn!(
+                            "output {connector_name:?}: cannot enable experimental HDR10: {err:?}; keeping SDR"
+                        );
+                        if let Err(reset_err) = disable_hdr_connector(
+                            &device.drm,
+                            connector.handle(),
+                            config.max_bpc,
+                            None,
+                        ) {
+                            warn!(
+                                "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
+                            );
+                        }
+                        (None, None)
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                (None, None)
+            };
 
         let vblank_frame_name =
             tracy_client::FrameName::new_leak(format!("vblank on {connector_name}"));
@@ -1677,6 +1691,8 @@ impl Tty {
             dmabuf_feedback,
             gamma_props,
             pending_gamma_change: None,
+            hdr_enabled: hdr_sdr_white_nits.is_some(),
+            hdr_restore_max_bpc,
             vblank_frame: None,
             vblank_frame_name,
             time_since_presentation_plot_name,
@@ -2645,32 +2661,46 @@ impl Tty {
                         config.max_bpc,
                         hdr,
                     ) {
-                        Ok(white) => Some(white),
+                        Ok((white, previous_max_bpc)) => {
+                            if !surface.hdr_enabled {
+                                surface.hdr_restore_max_bpc = previous_max_bpc;
+                            }
+                            surface.hdr_enabled = true;
+                            Some(white)
+                        }
                         Err(err) => {
                             warn!(
                                 "output {:?}: cannot enable experimental HDR10: {err:?}; keeping SDR",
                                 surface.name.connector
                             );
-                            if let Err(reset_err) =
-                                disable_hdr_connector(&device.drm, surface.connector, config.max_bpc)
-                            {
+                            if let Err(reset_err) = disable_hdr_connector(
+                                &device.drm,
+                                surface.connector,
+                                config.max_bpc,
+                                surface.hdr_restore_max_bpc.take(),
+                            ) {
                                 warn!(
                                     "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
                                     surface.name.connector
                                 );
                             }
+                            surface.hdr_enabled = false;
                             None
                         }
                     }
                 } else {
-                    if let Err(err) =
-                        disable_hdr_connector(&device.drm, surface.connector, config.max_bpc)
-                    {
+                    if let Err(err) = disable_hdr_connector(
+                        &device.drm,
+                        surface.connector,
+                        config.max_bpc,
+                        surface.hdr_restore_max_bpc.take(),
+                    ) {
                         warn!(
                             "output {:?}: failed to apply SDR connector properties: {err:?}",
                             surface.name.connector
                         );
                     }
+                    surface.hdr_enabled = false;
                     None
                 };
                 niri.set_output_hdr_transform(&output, hdr_sdr_white_nits);
