@@ -3662,8 +3662,9 @@ impl Niri {
                 .map(|(surface, pos_within_window)| {
                     (
                         surface,
-                        (pos_within_window + win_pos_within_output + output_pos_in_global_space)
-                            .to_f64(),
+                        pos_within_window.to_f64()
+                            + win_pos_within_output
+                            + output_pos_in_global_space.to_f64(),
                     )
                 })
         } else {
