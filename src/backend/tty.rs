@@ -382,6 +382,10 @@ struct Surface {
     gamma_props: Option<GammaProps>,
     /// Gamma change to apply upon session resume.
     pending_gamma_change: Option<Option<Vec<u16>>>,
+    /// Whether this surface currently has HDR connector signalling enabled.
+    hdr_enabled: bool,
+    /// max-bpc value observed before niri first enabled HDR on this surface.
+    hdr_restore_max_bpc: Option<u64>,
     /// Tracy frame that goes from vblank to vblank.
     vblank_frame: Option<tracy_client::Frame>,
     /// Frame name for the VBlank frame.
@@ -3830,14 +3834,20 @@ impl<'a> ConnectorProperties<'a> {
         Ok(())
     }
 
-    fn set_max_bpc(&mut self, max_bpc: MaxBpc) -> anyhow::Result<u64> {
+    fn max_bpc_value(&self) -> anyhow::Result<u64> {
+        let (info, value) = self.find(c"max bpc")?;
+        let property::Value::UnsignedRange(value) = info.value_type().convert_value(*value) else {
+            bail!("wrong property type")
+        };
+        Ok(value)
+    }
+
+    fn set_max_bpc_value(&mut self, max_bpc: u64) -> anyhow::Result<u64> {
         let (info, value) = self.find(c"max bpc")?;
 
         let property::ValueType::UnsignedRange(min, max) = info.value_type() else {
             bail!("wrong property type")
         };
-
-        let max_bpc = max_bpc.0 as u64;
         if !(min..=max).contains(&max_bpc) {
             bail!("max-bpc {max_bpc} outside valid range of [{min}, {max}]");
         }
@@ -3856,6 +3866,10 @@ impl<'a> ConnectorProperties<'a> {
         }
 
         Ok(max_bpc)
+    }
+
+    fn set_max_bpc(&mut self, max_bpc: MaxBpc) -> anyhow::Result<u64> {
+        self.set_max_bpc_value(max_bpc.0 as u64)
     }
 
     fn commit(&mut self) -> anyhow::Result<()> {
@@ -3885,7 +3899,7 @@ fn enable_hdr10_connector(
     format: Fourcc,
     configured_max_bpc: Option<MaxBpc>,
     hdr: &niri_config::output::Hdr,
-) -> anyhow::Result<f32> {
+) -> anyhow::Result<(f32, Option<u64>)> {
     ensure!(
         format == Fourcc::Abgr2101010,
         "DRM compositor selected {format:?}, but HDR requires the 10-bit ABGR2101010 swapchain"
@@ -3907,22 +3921,26 @@ fn enable_hdr10_connector(
     let max_bpc = configured_max_bpc.unwrap_or(MaxBpc(niri_ipc::MaxBpc::_10));
 
     let mut props = ConnectorProperties::try_new(device, connector)?;
+    let previous_max_bpc = props.max_bpc_value().ok();
     props.set_max_bpc(max_bpc)?;
     let sdr_white_nits = hdr.sdr_white_nits();
     props.set_hdr10(sdr_white_nits)?;
     props.commit()?;
 
-    Ok(sdr_white_nits)
+    Ok((sdr_white_nits, previous_max_bpc))
 }
 
 fn disable_hdr_connector(
     device: &DrmDevice,
     connector: connector::Handle,
     configured_max_bpc: Option<MaxBpc>,
+    restore_max_bpc: Option<u64>,
 ) -> anyhow::Result<()> {
     let mut props = ConnectorProperties::try_new(device, connector)?;
     if let Some(max_bpc) = configured_max_bpc {
         props.set_max_bpc(max_bpc)?;
+    } else if let Some(max_bpc) = restore_max_bpc {
+        props.set_max_bpc_value(max_bpc)?;
     }
     props.reset_hdr()?;
     props.commit()
