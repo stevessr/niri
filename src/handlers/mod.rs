@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use niri_config::OutputName;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
 use smithay::backend::input::{InputEvent, TabletToolDescriptor};
@@ -746,10 +747,43 @@ impl GammaControlHandler for State {
     }
 
     fn set_gamma(&mut self, output: &Output, ramp: Option<Vec<u16>>) -> Option<()> {
-        match self.backend.tty().set_gamma(output, ramp) {
+        if let Some(ramp) = ramp {
+            return match self.backend.tty().set_gamma(output, Some(ramp)) {
+                Ok(()) => Some(()),
+                Err(err) => {
+                    warn!("error setting gamma for output {}: {err:?}", output.name());
+                    None
+                }
+            };
+        }
+
+        // gamma-control clients temporarily override display calibration. Restore the configured
+        // ICC calibration when a client releases the output instead of always returning to a
+        // linear LUT.
+        let profile = output
+            .user_data()
+            .get::<OutputName>()
+            .and_then(|name| {
+                self.niri
+                    .config
+                    .borrow()
+                    .outputs
+                    .find(name)
+                    .and_then(|config| config.icc_profile.clone())
+            });
+
+        match self
+            .backend
+            .tty()
+            .set_icc_profile(output, profile.as_deref())
+        {
             Ok(()) => Some(()),
             Err(err) => {
-                warn!("error setting gamma for output {}: {err:?}", output.name());
+                warn!(
+                    "error restoring ICC calibration for output {}: {err:?}",
+                    output.name()
+                );
+                let _ = self.backend.tty().set_gamma(output, None);
                 None
             }
         }
