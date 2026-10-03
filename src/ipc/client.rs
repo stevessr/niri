@@ -783,9 +783,8 @@ fn print_output(output: Output) -> anyhow::Result<()> {
             println!("  DRM maximum BPC capability: {max_bpc}");
         }
 
-        let sink_hdr10 = hdr.pq
-            && hdr.static_metadata_type1
-            && (hdr.bt2020_rgb || hdr.bt2020_ycc);
+        let sink_hdr10 =
+            hdr.pq && hdr.static_metadata_type1 && hdr.bt2020_rgb && hdr.bt2020_ycc;
         let drm_hdr10 = hdr.drm_hdr_metadata
             && (hdr.drm_bt2020_rgb || hdr.drm_bt2020_ycc)
             && hdr.drm_max_bpc.is_some_and(|max_bpc| max_bpc >= 10);
