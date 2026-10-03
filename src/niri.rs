@@ -2177,6 +2177,12 @@ impl State {
             niri_ipc::OutputAction::MaxBpc { max_bpc } => config.max_bpc = Some(MaxBpc(max_bpc)),
             niri_ipc::OutputAction::IccProfile { path } => config.icc_profile = Some(path),
             niri_ipc::OutputAction::ResetIccProfile {} => config.icc_profile = None,
+            niri_ipc::OutputAction::Hdr {
+                enabled,
+                sdr_white_nits,
+            } => {
+                config.hdr = enabled.then_some(niri_config::output::Hdr { sdr_white_nits });
+            }
         });
 
         self.reload_output_config();
