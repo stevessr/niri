@@ -3630,7 +3630,7 @@ impl<'a> ConnectorProperties<'a> {
             .values()
             .1
             .iter()
-            .find(|value| matches!(value.name().to_bytes(), b"BT2020_RGB" | b"BT2020_YCC"))
+            .find(|value| value.name() == c"BT2020_RGB" || value.name() == c"BT2020_YCC")
             .context("DRM connector does not expose BT.2020 RGB/YCC")?
             .value();
 
@@ -3736,6 +3736,55 @@ impl<'a> ConnectorProperties<'a> {
 
         result
     }
+}
+
+fn enable_hdr10_connector(
+    device: &DrmDevice,
+    connector: connector::Handle,
+    format: Fourcc,
+    configured_max_bpc: Option<MaxBpc>,
+    hdr: &niri_config::output::Hdr,
+) -> anyhow::Result<f32> {
+    ensure!(
+        format == Fourcc::Abgr2101010,
+        "DRM compositor selected {format:?}, but HDR requires the 10-bit ABGR2101010 swapchain"
+    );
+
+    let capabilities = query_hdr_capabilities(device, connector);
+    ensure!(
+        hdr10_signalling_ready(&capabilities),
+        "sink/DRM path does not satisfy HDR10 signalling prerequisites"
+    );
+
+    if let Some(max_bpc) = configured_max_bpc {
+        ensure!(
+            max_bpc.0 as u8 >= 10,
+            "configured max-bpc {} is below the 10-bit HDR minimum",
+            max_bpc.0 as u8
+        );
+    }
+    let max_bpc = configured_max_bpc.unwrap_or(MaxBpc(niri_ipc::MaxBpc::_10));
+
+    let mut props = ConnectorProperties::try_new(device, connector)?;
+    props.set_max_bpc(max_bpc)?;
+    let sdr_white_nits = hdr.sdr_white_nits();
+    props.set_hdr10(sdr_white_nits)?;
+    props.commit()?;
+
+    Ok(sdr_white_nits)
+}
+
+fn disable_hdr_connector(
+    device: &DrmDevice,
+    connector: connector::Handle,
+    configured_max_bpc: Option<MaxBpc>,
+) -> anyhow::Result<()> {
+    let mut props = ConnectorProperties::try_new(device, connector)?;
+    if let Some(max_bpc) = configured_max_bpc {
+        props.set_max_bpc(max_bpc)?;
+    }
+    props.reset_hdr()?;
+    props.commit()
 }
 
 fn set_connector_properties(
