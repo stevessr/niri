@@ -15,7 +15,8 @@ const VCGT_FORMULA_TYPE: u32 = 1;
 /// This is calibration only. It does not perform ICC characterization transforms or HDR tone
 /// mapping.
 pub fn load_vcgt(path: &Path, output_entries: usize) -> anyhow::Result<Vec<u16>> {
-    let data = fs::read(path).with_context(|| format!("error reading ICC profile {}", path.display()))?;
+    let data = fs::read(path)
+        .with_context(|| format!("error reading ICC profile {}", path.display()))?;
     parse_vcgt(&data, output_entries)
         .with_context(|| format!("error parsing ICC profile {}", path.display()))
 }
@@ -250,15 +251,31 @@ mod tests {
 
     #[test]
     fn parses_and_resamples_three_channel_table() {
-        let tag = table_tag(
-            3,
-            &[0, 65535, 0, 32768, 0, 16384],
-        );
+        let tag = table_tag(3, &[0, 65535, 0, 32768, 0, 16384]);
         let ramp = parse_vcgt(&profile_with_vcgt(tag), 3).unwrap();
 
         assert_eq!(&ramp[0..3], &[0, 32768, 65535]);
         assert_eq!(&ramp[3..6], &[0, 16384, 32768]);
         assert_eq!(&ramp[6..9], &[0, 8192, 16384]);
+    }
+
+    #[test]
+    fn parses_identity_formula() {
+        let mut tag = vec![0; 48];
+        tag[0..4].copy_from_slice(b"vcgt");
+        tag[8..12].copy_from_slice(&VCGT_FORMULA_TYPE.to_be_bytes());
+
+        for channel in 0..3 {
+            let base = 12 + channel * 12;
+            tag[base..base + 4].copy_from_slice(&65536i32.to_be_bytes());
+            tag[base + 4..base + 8].copy_from_slice(&0i32.to_be_bytes());
+            tag[base + 8..base + 12].copy_from_slice(&65536i32.to_be_bytes());
+        }
+
+        let ramp = parse_vcgt(&profile_with_vcgt(tag), 3).unwrap();
+        assert_eq!(&ramp[0..3], &[0, 32768, 65535]);
+        assert_eq!(&ramp[3..6], &[0, 32768, 65535]);
+        assert_eq!(&ramp[6..9], &[0, 32768, 65535]);
     }
 
     #[test]
