@@ -1933,6 +1933,10 @@ impl Tty {
         // system.
         let flags = {
             let debug = &self.config.borrow().debug;
+            let color_transform_active = niri
+                .output_state
+                .get(output)
+                .is_some_and(|state| state.color_transform_active);
 
             let primary_scanout_flag = if debug.restrict_primary_scanout_to_matching_format {
                 FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT
@@ -1944,11 +1948,13 @@ impl Tty {
             if debug.enable_overlay_planes {
                 flags.insert(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
             }
-            if debug.disable_direct_scanout {
+            if debug.disable_direct_scanout || color_transform_active {
                 flags.remove(primary_scanout_flag);
                 flags.remove(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
             }
-            if debug.disable_cursor_plane {
+            // A hardware cursor would bypass an output-wide color transform too, so composite it
+            // into the primary plane whenever color management requires compositor rendering.
+            if debug.disable_cursor_plane || color_transform_active {
                 flags.remove(FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT);
             }
             if debug.skip_cursor_only_updates_during_vrr {
