@@ -486,6 +486,7 @@ pub struct OutputState {
     /// Output-wide color transforms (for example HDR transfer/gamut conversion or a future full
     /// ICC transform) must set this to true so DRM planes cannot bypass the transform.
     pub color_transform_active: bool,
+    color_transform_sdr_white_nits: f32,
     color_transform_effect: FramebufferEffect,
     // After the last redraw, some ongoing animations still remain.
     pub unfinished_animations_remain: bool,
@@ -3156,6 +3157,7 @@ impl Niri {
             redraw_state: RedrawState::Idle,
             on_demand_vrr_enabled: false,
             color_transform_active: false,
+            color_transform_sdr_white_nits: 203.,
             color_transform_effect: FramebufferEffect::new(),
             unfinished_animations_remain: false,
             frame_clock: FrameClock::new(refresh_interval, vrr),
@@ -3185,15 +3187,21 @@ impl Niri {
     ///
     /// The TTY backend observes this state to disable all DRM plane scanout paths that could
     /// bypass the transform.
-    pub fn set_output_color_transform_active(&mut self, output: &Output, active: bool) {
+    pub fn set_output_hdr_transform(&mut self, output: &Output, sdr_white_nits: Option<f32>) {
         let Some(state) = self.output_state.get_mut(output) else {
             return;
         };
-        if state.color_transform_active == active {
+
+        let active = sdr_white_nits.is_some();
+        let white = sdr_white_nits.unwrap_or(203.).clamp(80., 500.);
+        if state.color_transform_active == active
+            && (!active || state.color_transform_sdr_white_nits == white)
+        {
             return;
         }
 
         state.color_transform_active = active;
+        state.color_transform_sdr_white_nits = white;
         state.color_transform_effect.damage();
         self.queue_redraw(output);
     }
@@ -4526,7 +4534,12 @@ impl Niri {
                 clip: None,
                 scale: output.current_scale().fractional_scale(),
             };
-            push(state.color_transform_effect.render_output_hdr(params, 203.).into());
+            push(
+                state
+                    .color_transform_effect
+                    .render_output_hdr(params, state.color_transform_sdr_white_nits)
+                    .into(),
+            );
         }
 
         // The pointer goes on the top.
