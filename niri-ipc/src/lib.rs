@@ -1111,6 +1111,23 @@ pub enum OutputAction {
     },
     /// Stop applying an ICC display calibration profile.
     ResetIccProfile {},
+    /// Enable or disable the experimental HDR10 output path.
+    Hdr {
+        /// Whether to enable HDR.
+        #[cfg_attr(
+            feature = "clap",
+            arg(
+                value_name = "ON|OFF",
+                action = clap::ArgAction::Set,
+                value_parser = clap::builder::BoolishValueParser::new(),
+                hide_possible_values = true,
+            ),
+        )]
+        enabled: bool,
+        /// SDR diffuse-white luminance in nits. Defaults to 203.
+        #[cfg_attr(feature = "clap", arg(long))]
+        sdr_white_nits: Option<f64>,
+    },
 }
 
 /// Output mode to set.
@@ -2163,6 +2180,17 @@ impl OutputAction {
                     if *refresh <= 0. {
                         return Err(format!("custom mode refresh rate {refresh} must be > 0"));
                     }
+                }
+                Ok(())
+            }
+            OutputAction::Hdr {
+                sdr_white_nits: Some(value),
+                ..
+            } => {
+                if !value.is_finite() || !(80.0..=500.0).contains(value) {
+                    return Err(format!(
+                        "HDR SDR white {value} nits must be finite and between 80 and 500"
+                    ));
                 }
                 Ok(())
             }
