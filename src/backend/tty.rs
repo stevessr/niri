@@ -63,12 +63,15 @@ use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
 use super::{IpcOutputMap, RenderResult};
 use crate::backend::OutputId;
+use crate::color_management::load_vcgt;
 use crate::frame_clock::FrameClock;
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
-use crate::utils::{get_monotonic_time, is_laptop_panel, logical_output, PanelOrientation};
+use crate::utils::{
+    expand_home, get_monotonic_time, is_laptop_panel, logical_output, PanelOrientation,
+};
 
 // specific 10-bit formats for multigpu setup,
 // i.e. copying from rendering Nvidia dGPU to target iGPU.
@@ -2088,6 +2091,24 @@ impl Tty {
         }
     }
 
+    pub fn set_icc_profile(
+        &mut self,
+        output: &Output,
+        profile: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let Some(profile) = profile else {
+            return self.set_gamma(output, None);
+        };
+
+        let gamma_size = self.get_gamma_size(output)? as usize;
+        ensure!(gamma_size > 0, "setting gamma is not supported");
+
+        let path = Path::new(profile);
+        let path = expand_home(path)?.unwrap_or_else(|| path.to_path_buf());
+        let ramp = load_vcgt(&path, gamma_size)?;
+        self.set_gamma(output, Some(ramp))
+    }
+
     pub fn set_gamma(&mut self, output: &Output, ramp: Option<Vec<u16>>) -> anyhow::Result<()> {
         let tty_state = output.user_data().get::<TtyOutputState>().unwrap();
         let crtc = tty_state.crtc;
@@ -2569,6 +2590,42 @@ impl Tty {
         for (node, connector, crtc, _name) in to_connect {
             if let Err(err) = self.connector_connected(niri, node, connector, crtc) {
                 warn!("error connecting connector: {err:?}");
+            }
+        }
+
+        // Apply the configured calibration after all output/mode changes are complete. An active
+        // gamma-control client intentionally owns the LUT until it releases the output.
+        let profiles = niri
+            .global_space
+            .outputs()
+            .map(|output| {
+                let name = output.user_data().get::<OutputName>().unwrap();
+                let profile = self
+                    .config
+                    .borrow()
+                    .outputs
+                    .find(name)
+                    .and_then(|config| config.icc_profile.clone());
+                (output.clone(), profile)
+            })
+            .collect::<Vec<_>>();
+
+        for (output, profile) in profiles {
+            if niri.gamma_control_manager_state.is_active(&output) {
+                continue;
+            }
+
+            if let Err(err) = self.set_icc_profile(&output, profile.as_deref()) {
+                warn!(
+                    "output {:?}: error applying ICC profile: {err:?}; resetting calibration",
+                    output.name()
+                );
+                if let Err(reset_err) = self.set_gamma(&output, None) {
+                    warn!(
+                        "output {:?}: error resetting calibration after ICC failure: {reset_err:?}",
+                        output.name()
+                    );
+                }
             }
         }
 
@@ -3310,28 +3367,29 @@ impl<'a> ConnectorProperties<'a> {
     fn reset_hdr(&mut self) -> anyhow::Result<()> {
         const DRM_MODE_COLORIMETRY_DEFAULT: u64 = 0;
 
-        let (info, value) = self.find(c"HDR_OUTPUT_METADATA")?;
-
-        let property::ValueType::Blob = info.value_type() else {
-            bail!("wrong property type")
-        };
-        if *value != 0 {
-            self.requests
-                .add_raw_property(self.connector.into(), info.handle(), 0);
-            self.has_change = true;
+        if let Ok((info, value)) = self.find(c"HDR_OUTPUT_METADATA") {
+            let property::ValueType::Blob = info.value_type() else {
+                bail!("HDR_OUTPUT_METADATA has wrong property type")
+            };
+            if *value != 0 {
+                self.requests
+                    .add_raw_property(self.connector.into(), info.handle(), 0);
+                self.has_change = true;
+            }
         }
 
-        let (info, value) = self.find(c"Colorspace")?;
-        let property::ValueType::Enum(_) = info.value_type() else {
-            bail!("wrong property type")
-        };
-        if *value != DRM_MODE_COLORIMETRY_DEFAULT {
-            self.requests.add_raw_property(
-                self.connector.into(),
-                info.handle(),
-                DRM_MODE_COLORIMETRY_DEFAULT,
-            );
-            self.has_change = true;
+        if let Ok((info, value)) = self.find(c"Colorspace") {
+            let property::ValueType::Enum(_) = info.value_type() else {
+                bail!("Colorspace has wrong property type")
+            };
+            if *value != DRM_MODE_COLORIMETRY_DEFAULT {
+                self.requests.add_raw_property(
+                    self.connector.into(),
+                    info.handle(),
+                    DRM_MODE_COLORIMETRY_DEFAULT,
+                );
+                self.has_change = true;
+            }
         }
 
         Ok(())
