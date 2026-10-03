@@ -63,7 +63,7 @@ use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
 use super::{IpcOutputMap, RenderResult};
 use crate::backend::OutputId;
-use crate::color_management::load_vcgt;
+use crate::color_management::{load_vcgt, parse_edid_hdr_capabilities};
 use crate::frame_clock::FrameClock;
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
@@ -2253,6 +2253,52 @@ impl Tty {
                         .map(|v| v as u8)
                 });
 
+                let drm_hdr_metadata = props
+                    .as_ref()
+                    .is_some_and(|p| p.find(c"HDR_OUTPUT_METADATA").is_ok());
+                let drm_colorspace = props
+                    .as_ref()
+                    .is_some_and(|p| p.find(c"Colorspace").is_ok());
+
+                let mut hdr_capabilities = niri_ipc::HdrCapabilities {
+                    drm_hdr_metadata,
+                    drm_colorspace,
+                    ..Default::default()
+                };
+
+                match get_edid_data(&device.drm, connector.handle()) {
+                    Ok(data) => {
+                        hdr_capabilities.edid_available = true;
+                        match parse_edid_hdr_capabilities(&data) {
+                            Ok(edid) => {
+                                hdr_capabilities.static_metadata = edid.static_metadata;
+                                hdr_capabilities.traditional_hdr = edid.traditional_hdr;
+                                hdr_capabilities.pq = edid.pq;
+                                hdr_capabilities.hlg = edid.hlg;
+                                hdr_capabilities.static_metadata_type1 =
+                                    edid.static_metadata_type1;
+                                hdr_capabilities.bt2020_cycc = edid.bt2020_cycc;
+                                hdr_capabilities.bt2020_ycc = edid.bt2020_ycc;
+                                hdr_capabilities.bt2020_rgb = edid.bt2020_rgb;
+                                hdr_capabilities.max_luminance = edid.max_luminance;
+                                hdr_capabilities.max_frame_average_luminance =
+                                    edid.max_frame_average_luminance;
+                                hdr_capabilities.min_luminance = edid.min_luminance;
+                            }
+                            Err(err) => {
+                                debug!(
+                                    "output {connector_name:?}: could not parse EDID HDR capabilities: {err:?}"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        debug!(
+                            "output {connector_name:?}: could not read EDID for HDR capabilities: {err:?}"
+                        );
+                    }
+                }
+
                 let ipc_output = niri_ipc::Output {
                     name: connector_name,
                     make: output_name.make.unwrap_or_else(|| "Unknown".into()),
@@ -2267,6 +2313,7 @@ impl Tty {
                     logical,
                     max_bpc,
                     icc_profile: None,
+                    hdr_capabilities: Some(hdr_capabilities),
                 };
 
                 ipc_outputs.insert(id, ipc_output);
@@ -3394,10 +3441,10 @@ fn pick_mode(
     mode.map(|m| (*m, fallback))
 }
 
-fn get_edid_info(
+fn get_edid_data(
     device: &DrmDevice,
     connector: connector::Handle,
-) -> anyhow::Result<libdisplay_info::info::Info> {
+) -> anyhow::Result<Vec<u8>> {
     let (_, info, value) =
         find_drm_property(device, connector, "EDID").context("no EDID property")?;
     let blob = info
@@ -3405,9 +3452,16 @@ fn get_edid_info(
         .convert_value(value)
         .as_blob()
         .context("EDID was not blob type")?;
-    let data = device
+    device
         .get_property_blob(blob)
-        .context("error getting EDID blob value")?;
+        .context("error getting EDID blob value")
+}
+
+fn get_edid_info(
+    device: &DrmDevice,
+    connector: connector::Handle,
+) -> anyhow::Result<libdisplay_info::info::Info> {
+    let data = get_edid_data(device, connector)?;
     libdisplay_info::info::Info::parse_edid(&data).context("error parsing EDID")
 }
 
