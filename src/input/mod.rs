@@ -304,25 +304,34 @@ impl State {
         }
     }
 
-    fn virtual_pointer_agent_seat(
+    fn virtual_pointer_agent_context(
         &self,
         device: &VirtualPointer,
-    ) -> Option<Seat<State>> {
+    ) -> Option<(Seat<State>, Option<WlSurface>)> {
         let wl_seat = device.seat()?;
-        self.niri
+        let seat = self
+            .niri
             .agent_seats
             .iter()
             .find(|seat| seat.owns(wl_seat))
-            .cloned()
+            .cloned()?;
+        let target = self
+            .niri
+            .agent_pointer_targets
+            .get(wl_seat)
+            .filter(|surface| surface.is_alive())
+            .cloned();
+
+        Some((seat, target))
     }
 
     /// Route a standard zwlr_virtual_pointer_v1 motion event either through the
     /// existing primary input pipeline or through an isolated agent seat.
     pub fn process_virtual_pointer_motion(&mut self, event: VirtualPointerMotionEvent) {
         let device = event.device();
-        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+        if let Some((seat, target)) = self.virtual_pointer_agent_context(&device) {
             if self.niri.agent_input_allowed() {
-                self.on_agent_pointer_motion(&seat, event);
+                self.on_agent_pointer_motion(&seat, target.as_ref(), event);
             }
             return;
         }
@@ -335,9 +344,9 @@ impl State {
         event: VirtualPointerMotionAbsoluteEvent,
     ) {
         let device = event.device();
-        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+        if let Some((seat, target)) = self.virtual_pointer_agent_context(&device) {
             if self.niri.agent_input_allowed() {
-                self.on_agent_pointer_motion_absolute(&seat, event);
+                self.on_agent_pointer_motion_absolute(&seat, target.as_ref(), event);
             }
             return;
         }
@@ -349,9 +358,9 @@ impl State {
 
     pub fn process_virtual_pointer_button(&mut self, event: VirtualPointerButtonEvent) {
         let device = event.device();
-        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+        if let Some((seat, target)) = self.virtual_pointer_agent_context(&device) {
             if self.niri.agent_input_allowed() {
-                self.on_agent_pointer_button(&seat, event);
+                self.on_agent_pointer_button(&seat, target.as_ref(), event);
             }
             return;
         }
@@ -361,9 +370,9 @@ impl State {
 
     pub fn process_virtual_pointer_axis(&mut self, event: VirtualPointerAxisEvent) {
         let device = event.device();
-        if let Some(seat) = self.virtual_pointer_agent_seat(&device) {
+        if let Some((seat, target)) = self.virtual_pointer_agent_context(&device) {
             if self.niri.agent_input_allowed() {
-                self.on_agent_pointer_axis(&seat, event);
+                self.on_agent_pointer_axis(&seat, target.as_ref(), event);
             }
             return;
         }
@@ -403,6 +412,7 @@ impl State {
     fn on_agent_pointer_motion(
         &mut self,
         seat: &Seat<State>,
+        target: Option<&WlSurface>,
         event: VirtualPointerMotionEvent,
     ) {
         let Some(pointer) = seat.get_pointer() else {
@@ -411,7 +421,10 @@ impl State {
 
         let previous = pointer.current_location();
         let next = self.constrain_agent_pointer_location(previous, previous + event.delta());
-        let under = self.niri.contents_under(next);
+        let under = target.map_or_else(
+            || self.niri.contents_under(next),
+            |surface| self.niri.agent_target_contents(surface, next),
+        );
         let serial = SERIAL_COUNTER.next_serial();
 
         pointer.motion(
@@ -438,6 +451,7 @@ impl State {
     fn on_agent_pointer_motion_absolute(
         &mut self,
         seat: &Seat<State>,
+        target: Option<&WlSurface>,
         event: VirtualPointerMotionAbsoluteEvent,
     ) {
         let Some(pointer) = seat.get_pointer() else {
@@ -452,7 +466,10 @@ impl State {
             return;
         };
         let pos = self.constrain_agent_pointer_location(pointer.current_location(), pos);
-        let under = self.niri.contents_under(pos);
+        let under = target.map_or_else(
+            || self.niri.contents_under(pos),
+            |surface| self.niri.agent_target_contents(surface, pos),
+        );
         let serial = SERIAL_COUNTER.next_serial();
 
         pointer.motion(
@@ -470,6 +487,7 @@ impl State {
     fn on_agent_pointer_button(
         &mut self,
         seat: &Seat<State>,
+        _target: Option<&WlSurface>,
         event: VirtualPointerButtonEvent,
     ) {
         let Some(pointer) = seat.get_pointer() else {
@@ -497,7 +515,12 @@ impl State {
         pointer.frame(self);
     }
 
-    fn on_agent_pointer_axis(&mut self, seat: &Seat<State>, event: VirtualPointerAxisEvent) {
+    fn on_agent_pointer_axis(
+        &mut self,
+        seat: &Seat<State>,
+        _target: Option<&WlSurface>,
+        event: VirtualPointerAxisEvent,
+    ) {
         let Some(pointer) = seat.get_pointer() else {
             return;
         };
