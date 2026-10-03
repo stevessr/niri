@@ -770,6 +770,7 @@ mod tests {
                 mode "1920x1080@144"
                 max-bpc 10
                 icc-profile "/tmp/display.icc"
+                hdr sdr-white-nits=203
                 variable-refresh-rate on-demand=true
                 background-color "rgba(25, 25, 102, 1.0)"
                 hot-corners {
@@ -1227,6 +1228,13 @@ mod tests {
                         icc_profile: Some(
                             "/tmp/display.icc",
                         ),
+                        hdr: Some(
+                            Hdr {
+                                sdr_white_nits: Some(
+                                    203.0,
+                                ),
+                            },
+                        ),
                         mode: Some(
                             Mode {
                                 custom: false,
@@ -1274,6 +1282,7 @@ mod tests {
                         position: None,
                         max_bpc: None,
                         icc_profile: None,
+                        hdr: None,
                         mode: Some(
                             Mode {
                                 custom: true,
@@ -1302,6 +1311,7 @@ mod tests {
                         position: None,
                         max_bpc: None,
                         icc_profile: None,
+                        hdr: None,
                         mode: None,
                         modeline: Some(
                             Modeline {
