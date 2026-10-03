@@ -479,6 +479,11 @@ pub struct OutputState {
     pub frame_clock: FrameClock,
     pub redraw_state: RedrawState,
     pub on_demand_vrr_enabled: bool,
+    /// Whether this output requires every visible element to go through compositor rendering.
+    ///
+    /// Output-wide color transforms (for example HDR transfer/gamut conversion or a future full
+    /// ICC transform) must set this to true so DRM planes cannot bypass the transform.
+    pub color_transform_active: bool,
     // After the last redraw, some ongoing animations still remain.
     pub unfinished_animations_remain: bool,
     /// Last sequence received in a vblank event.
@@ -3147,6 +3152,7 @@ impl Niri {
             global,
             redraw_state: RedrawState::Idle,
             on_demand_vrr_enabled: false,
+            color_transform_active: false,
             unfinished_animations_remain: false,
             frame_clock: FrameClock::new(refresh_interval, vrr),
             last_drm_sequence: None,
