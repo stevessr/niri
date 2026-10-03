@@ -500,7 +500,7 @@ impl SessionLockHandler for State {
                     &pointer::MotionEvent {
                         location,
                         serial,
-                        time: 0,
+                        time: smithay::backend::input::InputTime::now(),
                     },
                 );
                 pointer.frame(self);
