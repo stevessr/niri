@@ -1231,7 +1231,9 @@ mod tests {
                         hdr: Some(
                             Hdr {
                                 sdr_white_nits: Some(
-                                    203.0,
+                                    FloatOrInt(
+                                        203.0,
+                                    ),
                                 ),
                             },
                         ),
