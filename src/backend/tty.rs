@@ -2792,6 +2792,20 @@ impl Tty {
             .collect::<Vec<_>>();
 
         for (output, profile) in profiles {
+            if niri
+                .output_state
+                .get(&output)
+                .is_some_and(|state| state.color_transform_active)
+            {
+                if let Err(err) = self.set_gamma(&output, None) {
+                    warn!(
+                        "output {:?}: error resetting gamma for HDR output: {err:?}",
+                        output.name()
+                    );
+                }
+                continue;
+            }
+
             if niri.gamma_control_manager_state.is_active(&output) {
                 continue;
             }
