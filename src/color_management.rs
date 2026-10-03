@@ -244,7 +244,7 @@ pub fn parse_edid_hdr_capabilities(data: &[u8]) -> anyhow::Result<EdidHdrCapabil
     for block_idx in 0..extension_count {
         let start = EDID_BLOCK_LEN * (block_idx + 1);
         let block = &data[start..start + EDID_BLOCK_LEN];
-        if block[0] != CTA_EXTENSION_TAG {
+        if block[0] != CTA_EXTENSION_TAG || block[1] < 3 {
             continue;
         }
 
