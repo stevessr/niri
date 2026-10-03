@@ -1256,6 +1256,9 @@ pub struct Output {
     /// currently enabled.
     #[serde(default)]
     pub hdr_capabilities: Option<HdrCapabilities>,
+    /// Whether niri is currently compositing this output through the experimental HDR10 path.
+    #[serde(default)]
+    pub hdr_enabled: bool,
 }
 
 /// HDR and wide-gamut capabilities for an output.
