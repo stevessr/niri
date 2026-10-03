@@ -145,21 +145,12 @@ pub struct MaxBpc(pub niri_ipc::MaxBpc);
 pub struct Hdr {
     /// SDR diffuse-white luminance when mapping SDR compositor content into PQ.
     #[knuffel(property)]
-    pub sdr_white_nits: Option<f64>,
+    pub sdr_white_nits: Option<FloatOrInt<80, 500>>,
 }
 
 impl Hdr {
     pub fn sdr_white_nits(&self) -> f32 {
-        const DEFAULT: f32 = 203.0;
-
-        let Some(value) = self.sdr_white_nits else {
-            return DEFAULT;
-        };
-        if !value.is_finite() || !(80.0..=500.0).contains(&value) {
-            return DEFAULT;
-        }
-
-        value as f32
+        self.sdr_white_nits.map_or(203.0, |value| value.0 as f32)
     }
 }
 
