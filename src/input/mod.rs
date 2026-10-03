@@ -315,12 +315,7 @@ impl State {
             .iter()
             .find(|seat| seat.owns(wl_seat))
             .cloned()?;
-        let target = self
-            .niri
-            .agent_pointer_targets
-            .get(wl_seat)
-            .filter(|surface| surface.is_alive())
-            .cloned();
+        let target = self.niri.agent_pointer_targets.get(wl_seat).cloned();
 
         Some((seat, target))
     }
