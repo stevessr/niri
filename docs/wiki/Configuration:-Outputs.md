@@ -338,6 +338,28 @@ niri msg output DP-1 icc-profile ~/.local/share/color/icc/display.icc
 niri msg output DP-1 reset-icc-profile
 ```
 
+### HDR capability reporting
+
+<sup>Since: next release</sup>
+
+`niri msg outputs` also reports HDR and wide-gamut signalling capabilities detected from the
+monitor EDID and DRM connector properties. Niri parses CTA-861 blocks directly so this works even
+on distributions with older libdisplay-info versions.
+
+The reported information includes:
+
+- PQ (SMPTE ST 2084), HLG and traditional HDR EOTF support;
+- BT.2020 RGB, YCC and constant-luminance YCC signalling support;
+- Static Metadata Type 1 support and advertised min/max/frame-average luminance;
+- whether the DRM connector exposes `HDR_OUTPUT_METADATA` and `Colorspace`.
+
+These fields are also present in the JSON IPC output as `hdr_capabilities`.
+
+This is capability discovery only. HDR composition is not enabled yet: applications are still
+composited through niri's existing SDR path, and niri continues to reset stale HDR connector
+metadata. A future HDR mode must perform the actual transfer-function/gamut conversion (and disable
+unsafe direct scanout paths) before setting HDR connector signalling.
+
 ### `hot-corners`
 
 <sup>Since: 25.11</sup>
