@@ -420,7 +420,7 @@ impl State {
             &MotionEvent {
                 location: next,
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
             },
         );
         pointer.relative_motion(
@@ -461,7 +461,7 @@ impl State {
             &MotionEvent {
                 location: pos,
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
             },
         );
         pointer.frame(self);
@@ -491,7 +491,7 @@ impl State {
                 button: event.button_code(),
                 state: event.state(),
                 serial,
-                time: event.time_msec(),
+                time: event.time(),
             },
         );
         pointer.frame(self);
