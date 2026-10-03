@@ -1290,6 +1290,14 @@ pub struct HdrCapabilities {
     pub drm_hdr_metadata: bool,
     /// Whether the DRM connector exposes the Colorspace property.
     pub drm_colorspace: bool,
+    /// Whether the DRM Colorspace property can signal BT.2020 RGB.
+    pub drm_bt2020_rgb: bool,
+    /// Whether the DRM Colorspace property can signal BT.2020 YCC.
+    pub drm_bt2020_ycc: bool,
+    /// Whether the DRM Colorspace property can signal BT.2020 constant-luminance YCC.
+    pub drm_bt2020_cycc: bool,
+    /// Maximum BPC accepted by the DRM connector property, when exposed.
+    pub drm_max_bpc: Option<u8>,
 }
 
 /// Output mode.
