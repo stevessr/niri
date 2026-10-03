@@ -228,6 +228,10 @@ pub fn parse_edid_hdr_capabilities(data: &[u8]) -> anyhow::Result<EdidHdrCapabil
         &data[..8] == b"\x00\xff\xff\xff\xff\xff\xff\x00",
         "invalid EDID header"
     );
+    ensure!(
+        edid_block_checksum_valid(&data[..EDID_BLOCK_LEN]),
+        "invalid base EDID checksum"
+    );
 
     let extension_count = data[126] as usize;
     let expected_len = EDID_BLOCK_LEN
@@ -244,6 +248,11 @@ pub fn parse_edid_hdr_capabilities(data: &[u8]) -> anyhow::Result<EdidHdrCapabil
     for block_idx in 0..extension_count {
         let start = EDID_BLOCK_LEN * (block_idx + 1);
         let block = &data[start..start + EDID_BLOCK_LEN];
+        ensure!(
+            edid_block_checksum_valid(block),
+            "invalid EDID extension checksum at block {}",
+            block_idx + 1
+        );
         if block[0] != CTA_EXTENSION_TAG || block[1] < 3 {
             continue;
         }
@@ -320,6 +329,18 @@ pub fn parse_edid_hdr_capabilities(data: &[u8]) -> anyhow::Result<EdidHdrCapabil
     }
 
     Ok(result)
+}
+
+fn edid_block_checksum_valid(block: &[u8]) -> bool {
+    block.len() == 128 && block.iter().fold(0u8, |sum, value| sum.wrapping_add(*value)) == 0
+}
+
+fn update_edid_checksum(block: &mut [u8]) {
+    debug_assert_eq!(block.len(), 128);
+    let sum = block[..127]
+        .iter()
+        .fold(0u8, |sum, value| sum.wrapping_add(*value));
+    block[127] = 0u8.wrapping_sub(sum);
 }
 
 fn decode_cta_max_luminance(code: u8) -> Option<f32> {
@@ -465,6 +486,8 @@ mod tests {
         offset += 7;
 
         cta[2] = offset as u8;
+        update_edid_checksum(cta);
+        update_edid_checksum(&mut edid[..128]);
 
         let capabilities = parse_edid_hdr_capabilities(&edid).unwrap();
         assert!(capabilities.static_metadata);
@@ -485,9 +508,20 @@ mod tests {
     fn parses_sdr_edid_without_hdr_blocks() {
         let mut edid = vec![0u8; 128];
         edid[..8].copy_from_slice(b"\x00\xff\xff\xff\xff\xff\xff\x00");
+        update_edid_checksum(&mut edid);
 
         let capabilities = parse_edid_hdr_capabilities(&edid).unwrap();
         assert_eq!(capabilities, EdidHdrCapabilities::default());
+    }
+
+    #[test]
+    fn rejects_corrupt_edid_checksum() {
+        let mut edid = vec![0u8; 128];
+        edid[..8].copy_from_slice(b"\x00\xff\xff\xff\xff\xff\xff\x00");
+        update_edid_checksum(&mut edid);
+        edid[20] ^= 1;
+
+        assert!(parse_edid_hdr_capabilities(&edid).is_err());
     }
 
     #[test]
@@ -495,6 +529,7 @@ mod tests {
         let mut edid = vec![0u8; 128];
         edid[..8].copy_from_slice(b"\x00\xff\xff\xff\xff\xff\xff\x00");
         edid[126] = 1;
+        update_edid_checksum(&mut edid);
 
         assert!(parse_edid_hdr_capabilities(&edid).is_err());
     }
