@@ -599,6 +599,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         logical,
         max_bpc,
         icc_profile,
+        hdr_capabilities,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -688,6 +689,69 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
     if let Some(icc_profile) = icc_profile {
         println!("  ICC profile: {icc_profile}");
+    }
+
+    if let Some(hdr) = hdr_capabilities {
+        let mut eotfs = Vec::new();
+        if hdr.traditional_hdr {
+            eotfs.push("traditional HDR");
+        }
+        if hdr.pq {
+            eotfs.push("PQ");
+        }
+        if hdr.hlg {
+            eotfs.push("HLG");
+        }
+
+        if !hdr.edid_available {
+            println!("  HDR sink capabilities: unknown (EDID unavailable)");
+        } else if eotfs.is_empty() {
+            println!("  HDR sink capabilities: not advertised");
+        } else {
+            println!("  HDR sink EOTFs: {}", eotfs.join(", "));
+
+            let mut colorimetry = Vec::new();
+            if hdr.bt2020_rgb {
+                colorimetry.push("BT.2020 RGB");
+            }
+            if hdr.bt2020_ycc {
+                colorimetry.push("BT.2020 YCC");
+            }
+            if hdr.bt2020_cycc {
+                colorimetry.push("BT.2020 cYCC");
+            }
+            if !colorimetry.is_empty() {
+                println!("  HDR colorimetry: {}", colorimetry.join(", "));
+            }
+
+            let mut luminance = Vec::new();
+            if let Some(value) = hdr.max_luminance {
+                luminance.push(format!("max {value:.2} cd/m²"));
+            }
+            if let Some(value) = hdr.max_frame_average_luminance {
+                luminance.push(format!("max frame-average {value:.2} cd/m²"));
+            }
+            if let Some(value) = hdr.min_luminance {
+                luminance.push(format!("min {value:.4} cd/m²"));
+            }
+            if !luminance.is_empty() {
+                println!("  HDR luminance: {}", luminance.join(", "));
+            }
+        }
+
+        println!(
+            "  DRM HDR signalling: metadata {}, colorspace {}",
+            if hdr.drm_hdr_metadata {
+                "available"
+            } else {
+                "unavailable"
+            },
+            if hdr.drm_colorspace {
+                "available"
+            } else {
+                "unavailable"
+            },
+        );
     }
 
     println!("  Available modes:");
