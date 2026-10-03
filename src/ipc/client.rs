@@ -600,6 +600,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         max_bpc,
         icc_profile,
         hdr_capabilities,
+        hdr_enabled,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -689,6 +690,12 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
     if let Some(icc_profile) = icc_profile {
         println!("  ICC profile: {icc_profile}");
+    }
+
+    if hdr_enabled {
+        println!("  HDR output: enabled (experimental HDR10 compositor path)");
+    } else {
+        println!("  HDR output: disabled");
     }
 
     if let Some(hdr) = hdr_capabilities {
