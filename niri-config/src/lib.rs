@@ -769,6 +769,7 @@ mod tests {
                 position x=10 y=20
                 mode "1920x1080@144"
                 max-bpc 10
+                icc-profile "/tmp/display.icc"
                 variable-refresh-rate on-demand=true
                 background-color "rgba(25, 25, 102, 1.0)"
                 hot-corners {
@@ -1223,6 +1224,9 @@ mod tests {
                                 _10,
                             ),
                         ),
+                        icc_profile: Some(
+                            "/tmp/display.icc",
+                        ),
                         mode: Some(
                             Mode {
                                 custom: false,
@@ -1269,6 +1273,7 @@ mod tests {
                         transform: Normal,
                         position: None,
                         max_bpc: None,
+                        icc_profile: None,
                         mode: Some(
                             Mode {
                                 custom: true,
@@ -1296,6 +1301,7 @@ mod tests {
                         transform: Normal,
                         position: None,
                         max_bpc: None,
+                        icc_profile: None,
                         mode: None,
                         modeline: Some(
                             Modeline {
