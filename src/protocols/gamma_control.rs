@@ -60,6 +60,10 @@ impl GammaControlManagerState {
             gamma_control.failed();
         }
     }
+
+    pub fn is_active(&self, output: &Output) -> bool {
+        self.gamma_controls.contains_key(output)
+    }
 }
 
 impl<D> GlobalDispatch<ZwlrGammaControlManagerV1, GammaControlManagerGlobalData, D>
