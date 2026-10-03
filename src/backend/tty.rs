@@ -790,7 +790,15 @@ impl Tty {
                         }
 
                         if let Some(gamma_props) = &mut surface.gamma_props {
-                            if let Some(ramp) = surface.pending_gamma_change.take() {
+                            if hdr_sdr_white_nits.is_some() {
+                                // HDR composition already applies the transfer function. Keep the
+                                // hardware LUT linear and discard gamma changes queued while the
+                                // session was inactive.
+                                surface.pending_gamma_change = None;
+                                if let Err(err) = gamma_props.set_gamma(&device.drm, None) {
+                                    warn!("error resetting gamma for HDR after resume: {err:?}");
+                                }
+                            } else if let Some(ramp) = surface.pending_gamma_change.take() {
                                 if let Err(err) = gamma_props.set_gamma(&device.drm, ramp) {
                                     warn!("error applying pending gamma change: {err:?}");
                                 }
