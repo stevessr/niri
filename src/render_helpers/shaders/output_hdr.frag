@@ -7,10 +7,10 @@
 uniform float sdr_white_nits;
 
 vec3 srgb_to_linear(vec3 c) {
-    bvec3 cutoff = lessThanEqual(c, vec3(0.04045));
     vec3 low = c / 12.92;
     vec3 high = pow((c + 0.055) / 1.055, vec3(2.4));
-    return mix(high, low, vec3(cutoff));
+    vec3 use_high = step(vec3(0.04045), c);
+    return mix(low, high, use_high);
 }
 
 vec3 rec709_to_rec2020(vec3 c) {
