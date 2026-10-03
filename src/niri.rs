@@ -2166,6 +2166,8 @@ impl State {
                 }
             }
             niri_ipc::OutputAction::MaxBpc { max_bpc } => config.max_bpc = Some(MaxBpc(max_bpc)),
+            niri_ipc::OutputAction::IccProfile { path } => config.icc_profile = Some(path),
+            niri_ipc::OutputAction::ResetIccProfile {} => config.icc_profile = None,
         });
 
         self.reload_output_config();
@@ -2187,6 +2189,15 @@ impl State {
                 .find(|output| output.name() == ipc_output.name)
                 .map(logical_output);
             ipc_output.logical = logical;
+
+            let name = OutputName::from_ipc_output(ipc_output);
+            ipc_output.icc_profile = self
+                .niri
+                .config
+                .borrow()
+                .outputs
+                .find(&name)
+                .and_then(|config| config.icc_profile.clone());
         }
 
         #[cfg(feature = "dbus")]
