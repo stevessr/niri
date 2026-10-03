@@ -120,6 +120,10 @@ input {
     // If the position is unset or results in an overlap, the output is instead placed
     // automatically.
     position x=1280 y=0
+
+    // Load calibration curves from an ICC profile's vcgt tag.
+    // This does not enable full ICC color conversion or HDR output.
+    // icc-profile "~/.local/share/color/icc/display.icc"
 }
 
 // Settings that influence how windows are positioned and sized.
