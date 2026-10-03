@@ -3659,7 +3659,8 @@ fn hdr10_signalling_ready(capabilities: &niri_ipc::HdrCapabilities) -> bool {
     capabilities.edid_available
         && capabilities.pq
         && capabilities.static_metadata_type1
-        && (capabilities.bt2020_rgb || capabilities.bt2020_ycc)
+        && capabilities.bt2020_rgb
+        && capabilities.bt2020_ycc
         && capabilities.drm_hdr_metadata
         && (capabilities.drm_bt2020_rgb || capabilities.drm_bt2020_ycc)
         && capabilities.drm_max_bpc.is_some_and(|max_bpc| max_bpc >= 10)
