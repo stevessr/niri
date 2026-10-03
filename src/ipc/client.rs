@@ -788,7 +788,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
             && (hdr.bt2020_rgb || hdr.bt2020_ycc);
         let drm_hdr10 = hdr.drm_hdr_metadata
             && (hdr.drm_bt2020_rgb || hdr.drm_bt2020_ycc)
-            && hdr.drm_max_bpc.is_none_or(|max_bpc| max_bpc >= 10);
+            && hdr.drm_max_bpc.is_some_and(|max_bpc| max_bpc >= 10);
 
         match (sink_hdr10, drm_hdr10) {
             (true, true) => {
