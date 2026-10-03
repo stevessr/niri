@@ -2222,6 +2222,7 @@ impl Tty {
                     vrr_enabled,
                     logical,
                     max_bpc,
+                    icc_profile: None,
                 };
 
                 ipc_outputs.insert(id, ipc_output);
