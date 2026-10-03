@@ -43,6 +43,15 @@ seat. With the primary seat it keeps the normal niri behavior. With an agent
 seat it sets only that seat's keyboard focus and does not raise the window,
 switch workspaces or change the user's layout focus.
 
+For pointer delivery, the activation target is bound to the concrete
+client-side `wl_seat` resource that issued the request. Subsequent virtual
+pointer motion from that same resource is hit-tested directly against the
+selected toplevel's tile, independently of the user's stacking order. This
+allows an occluded target (and a target on a non-active workspace of the same
+output) to receive pointer focus without visually raising or switching to it.
+A different Wayland connection starts with no pointer target, so explicit
+desktop-pointer operations do not inherit a stale window selection.
+
 For clients that require activation read-back, niri sends an `Activated`
 state acknowledgement only to the foreign-toplevel handle that requested the
 isolated activation. Global foreign-toplevel state continues to describe the
@@ -62,10 +71,12 @@ Current `trycua/cua` generic Wayland input already:
    for that same seat.
 
 Its seat selector excludes the Hyprland-plugin names `Cua-Agent` and
-`Cua-Agent-2`, but preserves the last advertised ordinary seat. Because niri
-advertises `niri-agent-*` after the primary seat, an unmodified CUA generic
-Wayland path selects an agent seat and receives background-focus semantics
-without moving the user's pointer/focus.
+`Cua-Agent-2`, but preserves the last advertised ordinary seat. Upstream
+`wtype` likewise overwrites its seat binding for every advertised `wl_seat`,
+so it ends up using the last seat. Because niri advertises `niri-agent-*`
+after the primary seat, both CUA's generic virtual-pointer path and the
+`wtype` virtual-keyboard process select the same final agent seat. This keeps
+pointer and keyboard delivery isolated without moving the user's pointer/focus.
 
 One limitation remains in current upstream CUA: its generic Wayland selector
 always chooses one "selected" seat, so multiple simultaneous CUA sessions do
