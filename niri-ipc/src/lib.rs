@@ -1250,6 +1250,46 @@ pub struct Output {
     /// full ICC characterization or HDR color conversion.
     #[serde(default)]
     pub icc_profile: Option<String>,
+    /// HDR and wide-gamut capabilities reported by the sink and DRM connector.
+    ///
+    /// This describes signalling capabilities only. It does not mean that HDR composition is
+    /// currently enabled.
+    #[serde(default)]
+    pub hdr_capabilities: Option<HdrCapabilities>,
+}
+
+/// HDR and wide-gamut capabilities for an output.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct HdrCapabilities {
+    /// Whether an EDID blob was available for capability detection.
+    pub edid_available: bool,
+    /// Whether the EDID contains a CTA HDR Static Metadata Data Block.
+    pub static_metadata: bool,
+    /// Traditional HDR EOTF support.
+    pub traditional_hdr: bool,
+    /// SMPTE ST 2084 (PQ) EOTF support.
+    pub pq: bool,
+    /// Hybrid Log-Gamma (HLG) EOTF support.
+    pub hlg: bool,
+    /// Static Metadata Type 1 support.
+    pub static_metadata_type1: bool,
+    /// BT.2020 constant-luminance YCC signalling support.
+    pub bt2020_cycc: bool,
+    /// BT.2020 YCC signalling support.
+    pub bt2020_ycc: bool,
+    /// BT.2020 RGB signalling support.
+    pub bt2020_rgb: bool,
+    /// Desired content maximum luminance in cd/m², when advertised.
+    pub max_luminance: Option<f32>,
+    /// Desired content maximum frame-average luminance in cd/m², when advertised.
+    pub max_frame_average_luminance: Option<f32>,
+    /// Desired content minimum luminance in cd/m², when advertised.
+    pub min_luminance: Option<f32>,
+    /// Whether the DRM connector exposes HDR_OUTPUT_METADATA.
+    pub drm_hdr_metadata: bool,
+    /// Whether the DRM connector exposes the Colorspace property.
+    pub drm_colorspace: bool,
 }
 
 /// Output mode.
