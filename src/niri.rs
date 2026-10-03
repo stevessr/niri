@@ -2181,7 +2181,9 @@ impl State {
                 enabled,
                 sdr_white_nits,
             } => {
-                config.hdr = enabled.then_some(niri_config::output::Hdr { sdr_white_nits });
+                config.hdr = enabled.then_some(niri_config::output::Hdr {
+                    sdr_white_nits: sdr_white_nits.map(FloatOrInt),
+                });
             }
         });
 
