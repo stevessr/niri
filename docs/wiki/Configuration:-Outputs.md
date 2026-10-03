@@ -16,6 +16,7 @@ output "eDP-1" {
     focus-at-startup
     backdrop-color "#001100"
     // max-bpc 8
+    // icc-profile "~/.local/share/color/icc/display.icc"
 
     hot-corners {
         // off
@@ -299,6 +300,42 @@ Valid values are `6`, `8`, `10`, `12`, `14`, `16`.
 output "HDMI-A-1" {
     max-bpc 8
 }
+```
+
+### `icc-profile`
+
+<sup>Since: next release</sup>
+
+Apply the display calibration stored in an ICC profile to this output.
+
+```kdl
+output "DP-1" {
+    icc-profile "~/.local/share/color/icc/display.icc"
+}
+```
+
+Niri currently reads the profile's `vcgt` (video card gamma table) tag and loads it into the
+output's hardware gamma LUT. Both table-based and formula-based ColorSync `vcgt` data are
+supported, and the curves are resampled to the LUT size exposed by the DRM driver.
+
+This is **display calibration**, not full ICC color conversion. The profile's characterization
+data is not yet used to transform application content between color spaces, and this option does
+not enable HDR output. Until niri has a complete HDR/color-management rendering path, HDR
+connector metadata is reset to SDR defaults to avoid displaying ordinary SDR content with stale
+HDR state left by another compositor.
+
+The calibration is reapplied after output configuration changes, reconnects and session resume.
+A Wayland gamma-control client may temporarily override it; when the client releases the output,
+niri restores the configured ICC calibration.
+
+If the profile cannot be read, has no supported `vcgt` tag, or the output has no programmable
+gamma LUT, niri logs the error and resets that output to a linear gamma ramp.
+
+Use the IPC output actions to change the profile without editing the config file:
+
+```sh
+niri msg output DP-1 icc-profile ~/.local/share/color/icc/display.icc
+niri msg output DP-1 reset-icc-profile
 ```
 
 ### `hot-corners`
