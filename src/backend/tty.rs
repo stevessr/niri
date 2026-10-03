@@ -2559,23 +2559,6 @@ impl Tty {
                     },
                 };
 
-                if let Ok(mut props) = ConnectorProperties::try_new(&device.drm, surface.connector)
-                {
-                    set_connector_properties(&mut props, config.max_bpc, false);
-                } else {
-                    warn!("failed to get connector properties");
-                }
-
-                let change_mode = surface.compositor.pending_mode() != mode;
-
-                let vrr_enabled = surface.compositor.vrr_enabled();
-                let change_always_vrr = vrr_enabled != config.is_vrr_always_on();
-                let is_on_demand_vrr = config.is_vrr_on_demand();
-
-                if !change_mode && !change_always_vrr && !is_on_demand_vrr {
-                    continue;
-                }
-
                 let output = niri
                     .global_space
                     .outputs()
@@ -2588,6 +2571,55 @@ impl Tty {
                     error!("missing output for crtc: {crtc:?}");
                     continue;
                 };
+
+                let hdr_sdr_white_nits = if let Some(hdr) = config.hdr.as_ref() {
+                    match enable_hdr10_connector(
+                        &device.drm,
+                        surface.connector,
+                        surface.compositor.format(),
+                        config.max_bpc,
+                        hdr,
+                    ) {
+                        Ok(white) => Some(white),
+                        Err(err) => {
+                            warn!(
+                                "output {:?}: cannot enable experimental HDR10: {err:?}; keeping SDR",
+                                surface.name.connector
+                            );
+                            if let Err(reset_err) =
+                                disable_hdr_connector(&device.drm, surface.connector, config.max_bpc)
+                            {
+                                warn!(
+                                    "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
+                                    surface.name.connector
+                                );
+                            }
+                            None
+                        }
+                    }
+                } else {
+                    if let Err(err) =
+                        disable_hdr_connector(&device.drm, surface.connector, config.max_bpc)
+                    {
+                        warn!(
+                            "output {:?}: failed to apply SDR connector properties: {err:?}",
+                            surface.name.connector
+                        );
+                    }
+                    None
+                };
+                niri.set_output_hdr_transform(&output, hdr_sdr_white_nits);
+
+                let change_mode = surface.compositor.pending_mode() != mode;
+
+                let vrr_enabled = surface.compositor.vrr_enabled();
+                let change_always_vrr = vrr_enabled != config.is_vrr_always_on();
+                let is_on_demand_vrr = config.is_vrr_on_demand();
+
+                if !change_mode && !change_always_vrr && !is_on_demand_vrr {
+                    continue;
+                }
+
                 let Some(output_state) = niri.output_state.get_mut(&output) else {
                     error!("missing state for output {:?}", surface.name.connector);
                     continue;
