@@ -752,6 +752,46 @@ fn print_output(output: Output) -> anyhow::Result<()> {
                 "unavailable"
             },
         );
+
+        if hdr.drm_colorspace {
+            let mut colorimetry = Vec::new();
+            if hdr.drm_bt2020_rgb {
+                colorimetry.push("BT2020_RGB");
+            }
+            if hdr.drm_bt2020_ycc {
+                colorimetry.push("BT2020_YCC");
+            }
+            if hdr.drm_bt2020_cycc {
+                colorimetry.push("BT2020_CYCC");
+            }
+
+            if colorimetry.is_empty() {
+                println!("  DRM BT.2020 signalling: unavailable");
+            } else {
+                println!("  DRM BT.2020 signalling: {}", colorimetry.join(", "));
+            }
+        }
+
+        if let Some(max_bpc) = hdr.drm_max_bpc {
+            println!("  DRM maximum BPC capability: {max_bpc}");
+        }
+
+        let sink_hdr10 = hdr.pq
+            && hdr.static_metadata_type1
+            && (hdr.bt2020_rgb || hdr.bt2020_ycc);
+        let drm_hdr10 = hdr.drm_hdr_metadata
+            && (hdr.drm_bt2020_rgb || hdr.drm_bt2020_ycc)
+            && hdr.drm_max_bpc.is_none_or(|max_bpc| max_bpc >= 10);
+
+        match (sink_hdr10, drm_hdr10) {
+            (true, true) => {
+                println!(
+                    "  HDR10 signalling prerequisites: available (composition is still SDR)"
+                );
+            }
+            (false, _) => println!("  HDR10 signalling prerequisites: sink does not advertise them"),
+            (_, false) => println!("  HDR10 signalling prerequisites: DRM path is incomplete"),
+        }
     }
 
     println!("  Available modes:");
