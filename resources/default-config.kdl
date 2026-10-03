@@ -122,8 +122,12 @@ input {
     position x=1280 y=0
 
     // Load calibration curves from an ICC profile's vcgt tag.
-    // This does not enable full ICC color conversion or HDR output.
     // icc-profile "~/.local/share/color/icc/display.icc"
+
+    // Experimental HDR10 output. This is enabled only when the monitor and DRM path advertise
+    // PQ, BT.2020, HDR metadata and a 10-bit connector path; otherwise niri stays in SDR.
+    // SDR diffuse white defaults to 203 nits and can be adjusted between 80 and 500.
+    // hdr sdr-white-nits=203
 }
 
 // Settings that influence how windows are positioned and sized.
