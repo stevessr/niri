@@ -367,7 +367,8 @@ output "DP-1" {
 
 The `hdr` node is fail-closed. Niri enables it only when all of the following are true:
 
-- the EDID advertises PQ, Static Metadata Type 1 and BT.2020 RGB or YCC;
+- the EDID advertises PQ, Static Metadata Type 1, BT.2020 RGB **and** YCC (the driver may choose
+  either connector encoding unless a color format is forced);
 - DRM exposes `HDR_OUTPUT_METADATA` and a BT.2020 RGB/YCC `Colorspace` value;
 - the connector's `max bpc` property supports at least 10 bpc;
 - the DRM compositor actually selected the 10-bit `ABGR2101010` swapchain format.
