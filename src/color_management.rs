@@ -196,6 +196,151 @@ fn resample(input: &[u16], output_entries: usize) -> Vec<u16> {
         .collect()
 }
 
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct EdidHdrCapabilities {
+    pub static_metadata: bool,
+    pub traditional_hdr: bool,
+    pub pq: bool,
+    pub hlg: bool,
+    pub static_metadata_type1: bool,
+    pub bt2020_cycc: bool,
+    pub bt2020_ycc: bool,
+    pub bt2020_rgb: bool,
+    pub max_luminance: Option<f32>,
+    pub max_frame_average_luminance: Option<f32>,
+    pub min_luminance: Option<f32>,
+}
+
+/// Parse CTA-861 HDR and BT.2020 signalling capabilities directly from an EDID blob.
+///
+/// This intentionally avoids newer libdisplay-info APIs so builds remain compatible with
+/// distributions that still ship libdisplay-info 0.1.x.
+pub fn parse_edid_hdr_capabilities(data: &[u8]) -> anyhow::Result<EdidHdrCapabilities> {
+    const EDID_BLOCK_LEN: usize = 128;
+    const CTA_EXTENSION_TAG: u8 = 0x02;
+    const CTA_EXTENDED_DATA_BLOCK: u8 = 0x07;
+    const CTA_COLORIMETRY_EXT_TAG: u8 = 0x05;
+    const CTA_HDR_STATIC_METADATA_EXT_TAG: u8 = 0x06;
+
+    ensure!(data.len() >= EDID_BLOCK_LEN, "EDID is too short");
+    ensure!(
+        &data[..8] == b"\x00\xff\xff\xff\xff\xff\xff\x00",
+        "invalid EDID header"
+    );
+
+    let extension_count = data[126] as usize;
+    let expected_len = EDID_BLOCK_LEN
+        .checked_mul(extension_count + 1)
+        .context("EDID size overflow")?;
+    ensure!(
+        data.len() >= expected_len,
+        "EDID is truncated: expected at least {expected_len} bytes, got {}",
+        data.len()
+    );
+
+    let mut result = EdidHdrCapabilities::default();
+
+    for block_idx in 0..extension_count {
+        let start = EDID_BLOCK_LEN * (block_idx + 1);
+        let block = &data[start..start + EDID_BLOCK_LEN];
+        if block[0] != CTA_EXTENSION_TAG {
+            continue;
+        }
+
+        let dtd_offset = block[2] as usize;
+        let data_end = match dtd_offset {
+            0 => EDID_BLOCK_LEN - 1,
+            4..=127 => dtd_offset,
+            _ => continue,
+        };
+
+        let mut offset = 4usize;
+        while offset < data_end {
+            let header = block[offset];
+            let tag = header >> 5;
+            let len = usize::from(header & 0x1f);
+            offset += 1;
+
+            let end = match offset.checked_add(len) {
+                Some(end) if end <= data_end => end,
+                _ => break,
+            };
+            let payload = &block[offset..end];
+            offset = end;
+
+            if tag != CTA_EXTENDED_DATA_BLOCK || payload.is_empty() {
+                continue;
+            }
+
+            match payload[0] {
+                CTA_COLORIMETRY_EXT_TAG if payload.len() >= 2 => {
+                    let flags = payload[1];
+                    result.bt2020_cycc |= flags & (1 << 5) != 0;
+                    result.bt2020_ycc |= flags & (1 << 6) != 0;
+                    result.bt2020_rgb |= flags & (1 << 7) != 0;
+                }
+                CTA_HDR_STATIC_METADATA_EXT_TAG if payload.len() >= 3 => {
+                    result.static_metadata = true;
+
+                    let eotf = payload[1];
+                    result.traditional_hdr |= eotf & (1 << 1) != 0;
+                    result.pq |= eotf & (1 << 2) != 0;
+                    result.hlg |= eotf & (1 << 3) != 0;
+                    result.static_metadata_type1 |= payload[2] & 1 != 0;
+
+                    let max_luminance = payload
+                        .get(3)
+                        .copied()
+                        .and_then(decode_cta_max_luminance);
+                    merge_max(&mut result.max_luminance, max_luminance);
+
+                    let max_frame_average_luminance = payload
+                        .get(4)
+                        .copied()
+                        .and_then(decode_cta_max_luminance);
+                    merge_max(
+                        &mut result.max_frame_average_luminance,
+                        max_frame_average_luminance,
+                    );
+
+                    if let (Some(code), Some(max_luminance)) =
+                        (payload.get(5).copied(), max_luminance)
+                    {
+                        let min_luminance = decode_cta_min_luminance(code, max_luminance);
+                        result.min_luminance = match result.min_luminance {
+                            Some(current) => Some(current.min(min_luminance)),
+                            None => Some(min_luminance),
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn decode_cta_max_luminance(code: u8) -> Option<f32> {
+    if code == 0 {
+        return None;
+    }
+
+    Some(50.0 * 2.0f32.powf(f32::from(code) / 32.0))
+}
+
+fn decode_cta_min_luminance(code: u8, max_luminance: f32) -> f32 {
+    let normalized = f32::from(code) / 255.0;
+    max_luminance * normalized * normalized / 100.0
+}
+
+fn merge_max(slot: &mut Option<f32>, value: Option<f32>) {
+    if let Some(value) = value {
+        *slot = Some(slot.map_or(value, |current| current.max(value)));
+    }
+}
+
 fn be_u16(data: &[u8], offset: usize) -> anyhow::Result<u16> {
     let end = offset.checked_add(2).context("offset overflow")?;
     let bytes: [u8; 2] = data
@@ -287,6 +432,71 @@ mod tests {
         assert_eq!(&ramp[4..8], &ramp[8..12]);
         assert_eq!(ramp[0], 0);
         assert_eq!(ramp[3], 65535);
+    }
+
+
+    #[test]
+    fn parses_cta_hdr_and_bt2020_capabilities() {
+        let mut edid = vec![0u8; 256];
+        edid[..8].copy_from_slice(b"\x00\xff\xff\xff\xff\xff\xff\x00");
+        edid[126] = 1;
+
+        let cta = &mut edid[128..256];
+        cta[0] = 0x02;
+        cta[1] = 3;
+
+        let mut offset = 4usize;
+
+        // Extended Colorimetry Data Block: BT.2020 cYCC, YCC and RGB.
+        cta[offset] = (0x07 << 5) | 3;
+        cta[offset + 1] = 0x05;
+        cta[offset + 2] = 0b1110_0000;
+        cta[offset + 3] = 0;
+        offset += 4;
+
+        // Extended HDR Static Metadata Data Block.
+        cta[offset] = (0x07 << 5) | 6;
+        cta[offset + 1] = 0x06;
+        cta[offset + 2] = 0b0000_1101; // traditional SDR + PQ + HLG
+        cta[offset + 3] = 0b0000_0001; // Static Metadata Type 1
+        cta[offset + 4] = 64; // 200 cd/m²
+        cta[offset + 5] = 32; // 100 cd/m²
+        cta[offset + 6] = 127;
+        offset += 7;
+
+        cta[2] = offset as u8;
+
+        let capabilities = parse_edid_hdr_capabilities(&edid).unwrap();
+        assert!(capabilities.static_metadata);
+        assert!(!capabilities.traditional_hdr);
+        assert!(capabilities.pq);
+        assert!(capabilities.hlg);
+        assert!(capabilities.static_metadata_type1);
+        assert!(capabilities.bt2020_cycc);
+        assert!(capabilities.bt2020_ycc);
+        assert!(capabilities.bt2020_rgb);
+        assert_eq!(capabilities.max_luminance, Some(200.0));
+        assert_eq!(capabilities.max_frame_average_luminance, Some(100.0));
+        assert!(capabilities.min_luminance.unwrap() > 0.49);
+        assert!(capabilities.min_luminance.unwrap() < 0.51);
+    }
+
+    #[test]
+    fn parses_sdr_edid_without_hdr_blocks() {
+        let mut edid = vec![0u8; 128];
+        edid[..8].copy_from_slice(b"\x00\xff\xff\xff\xff\xff\xff\x00");
+
+        let capabilities = parse_edid_hdr_capabilities(&edid).unwrap();
+        assert_eq!(capabilities, EdidHdrCapabilities::default());
+    }
+
+    #[test]
+    fn rejects_truncated_edid_extensions() {
+        let mut edid = vec![0u8; 128];
+        edid[..8].copy_from_slice(b"\x00\xff\xff\xff\xff\xff\xff\x00");
+        edid[126] = 1;
+
+        assert!(parse_edid_hdr_capabilities(&edid).is_err());
     }
 
     #[test]
