@@ -432,6 +432,28 @@ struct ConnectorProperties<'a> {
     properties: Vec<(property::Info, property::RawValue)>,
     has_change: bool,
     requests: AtomicModeReq,
+    created_blobs: Vec<NonZeroU64>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct DrmHdrMetadataInfoframe {
+    eotf: u8,
+    metadata_type: u8,
+    display_primaries: [[u16; 2]; 3],
+    white_point: [u16; 2],
+    max_display_mastering_luminance: u16,
+    min_display_mastering_luminance: u16,
+    max_cll: u16,
+    max_fall: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct DrmHdrOutputMetadata {
+    metadata_type: u32,
+    hdmi_metadata_type1: DrmHdrMetadataInfoframe,
+    padding: [u8; 2],
 }
 
 impl Tty {
@@ -3527,6 +3549,7 @@ impl<'a> ConnectorProperties<'a> {
             properties,
             has_change: false,
             requests: AtomicModeReq::new(),
+            created_blobs: Vec::new(),
         })
     }
 
@@ -3589,6 +3612,74 @@ impl<'a> ConnectorProperties<'a> {
         Ok(())
     }
 
+    fn set_hdr10(&mut self, sdr_white_nits: f32) -> anyhow::Result<()> {
+        let (colorspace_info, colorspace_value) = self.find(c"Colorspace")?;
+        let property::ValueType::Enum(values) = colorspace_info.value_type() else {
+            bail!("Colorspace has wrong property type")
+        };
+        let colorspace = values
+            .values()
+            .1
+            .iter()
+            .find(|value| matches!(value.name().to_bytes(), b"BT2020_RGB" | b"BT2020_YCC"))
+            .context("DRM connector does not expose BT.2020 RGB/YCC")?
+            .value();
+
+        if *colorspace_value != colorspace {
+            self.requests.add_raw_property(
+                self.connector.into(),
+                colorspace_info.handle(),
+                colorspace,
+            );
+            self.has_change = true;
+        }
+
+        let (metadata_info, _) = self.find(c"HDR_OUTPUT_METADATA")?;
+        let property::ValueType::Blob = metadata_info.value_type() else {
+            bail!("HDR_OUTPUT_METADATA has wrong property type")
+        };
+
+        // The compositor currently maps SDR values in [0, 1] to [0, sdr_white_nits], so there
+        // are no highlights above SDR white yet. Advertise metadata that describes that composed
+        // signal rather than pretending to master at a higher luminance.
+        let content_max = sdr_white_nits.clamp(80., 500.).ceil() as u16;
+        let mut metadata = DrmHdrOutputMetadata {
+            metadata_type: 0,
+            hdmi_metadata_type1: DrmHdrMetadataInfoframe {
+                // CTA-861 SMPTE ST 2084 (PQ), Static Metadata Type 1.
+                eotf: 2,
+                metadata_type: 0,
+                // BT.2020 primaries in units of 0.00002.
+                display_primaries: [[35400, 14600], [8500, 39850], [6550, 2300]],
+                // D65.
+                white_point: [15635, 16450],
+                max_display_mastering_luminance: content_max,
+                min_display_mastering_luminance: 0,
+                max_cll: content_max,
+                max_fall: content_max,
+            },
+            padding: [0; 2],
+        };
+
+        let blob = drm_ffi::mode::create_property_blob(
+            self.device.as_fd(),
+            bytes_of_mut(&mut metadata),
+        )
+        .context("error creating HDR_OUTPUT_METADATA property blob")?;
+        let blob = NonZeroU64::new(u64::from(blob.blob_id))
+            .context("DRM returned a zero HDR metadata blob id")?;
+        self.created_blobs.push(blob);
+
+        self.requests.add_raw_property(
+            self.connector.into(),
+            metadata_info.handle(),
+            blob.get(),
+        );
+        self.has_change = true;
+
+        Ok(())
+    }
+
     fn set_max_bpc(&mut self, max_bpc: MaxBpc) -> anyhow::Result<u64> {
         let (info, value) = self.find(c"max bpc")?;
 
@@ -3618,14 +3709,23 @@ impl<'a> ConnectorProperties<'a> {
     }
 
     fn commit(&mut self) -> anyhow::Result<()> {
-        if self.has_change {
+        let result = if self.has_change {
             self.device.atomic_commit(
                 AtomicCommitFlags::ALLOW_MODESET,
                 std::mem::take(&mut self.requests),
-            )?;
+            )
+            .context("error committing connector properties")
+        } else {
+            Ok(())
+        };
+
+        for blob in self.created_blobs.drain(..) {
+            if let Err(err) = self.device.destroy_property_blob(blob.get()) {
+                warn!("error destroying HDR metadata property blob: {err:?}");
+            }
         }
 
-        Ok(())
+        result
     }
 }
 
