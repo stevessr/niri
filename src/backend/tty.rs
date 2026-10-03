@@ -2245,24 +2245,39 @@ impl Tty {
                 });
 
                 let props = ConnectorProperties::try_new(&device.drm, connector.handle()).ok();
-                let max_bpc = props.as_ref().and_then(|p| p.find(c"max bpc").ok());
-                let max_bpc = max_bpc.and_then(|(info, value)| {
+                let max_bpc_prop = props.as_ref().and_then(|p| p.find(c"max bpc").ok());
+                let max_bpc = max_bpc_prop.and_then(|(info, value)| {
                     info.value_type()
                         .convert_value(*value)
                         .as_unsigned_range()
                         .map(|v| v as u8)
                 });
+                let drm_max_bpc = max_bpc_prop.and_then(|(info, _)| {
+                    let property::ValueType::UnsignedRange(_, max) = info.value_type() else {
+                        return None;
+                    };
+                    u8::try_from(*max).ok()
+                });
 
                 let drm_hdr_metadata = props
                     .as_ref()
                     .is_some_and(|p| p.find(c"HDR_OUTPUT_METADATA").is_ok());
-                let drm_colorspace = props
-                    .as_ref()
-                    .is_some_and(|p| p.find(c"Colorspace").is_ok());
+                let colorspace = props.as_ref().and_then(|p| p.find(c"Colorspace").ok());
+                let drm_colorspace = colorspace.is_some();
+                let drm_bt2020_rgb = colorspace
+                    .is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_RGB"));
+                let drm_bt2020_ycc = colorspace
+                    .is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_YCC"));
+                let drm_bt2020_cycc = colorspace
+                    .is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_CYCC"));
 
                 let mut hdr_capabilities = niri_ipc::HdrCapabilities {
                     drm_hdr_metadata,
                     drm_colorspace,
+                    drm_bt2020_rgb,
+                    drm_bt2020_ycc,
+                    drm_bt2020_cycc,
+                    drm_max_bpc,
                     ..Default::default()
                 };
 
@@ -3463,6 +3478,14 @@ fn get_edid_info(
 ) -> anyhow::Result<libdisplay_info::info::Info> {
     let data = get_edid_data(device, connector)?;
     libdisplay_info::info::Info::parse_edid(&data).context("error parsing EDID")
+}
+
+fn enum_property_has_value(info: &property::Info, name: &std::ffi::CStr) -> bool {
+    let property::ValueType::Enum(values) = info.value_type() else {
+        return false;
+    };
+
+    values.values().1.iter().any(|value| value.name() == name)
 }
 
 impl<'a> ConnectorProperties<'a> {
