@@ -598,6 +598,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         vrr_enabled,
         logical,
         max_bpc,
+        icc_profile,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -683,6 +684,10 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
     if let Some(max_bpc) = max_bpc {
         println!("  Max bits per channel: {max_bpc}");
+    }
+
+    if let Some(icc_profile) = icc_profile {
+        println!("  ICC profile: {icc_profile}");
     }
 
     println!("  Available modes:");
