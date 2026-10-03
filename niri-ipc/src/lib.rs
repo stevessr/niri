@@ -1103,6 +1103,14 @@ pub enum OutputAction {
         #[cfg_attr(feature = "clap", arg())]
         max_bpc: MaxBpc,
     },
+    /// Set the ICC display profile used for hardware calibration.
+    IccProfile {
+        /// Path to an ICC profile containing a `vcgt` calibration tag.
+        #[cfg_attr(feature = "clap", arg())]
+        path: String,
+    },
+    /// Stop applying an ICC display calibration profile.
+    ResetIccProfile {},
 }
 
 /// Output mode to set.
@@ -1236,6 +1244,12 @@ pub struct Output {
     pub logical: Option<LogicalOutput>,
     /// Maximum bits per channel (bit depth), if known.
     pub max_bpc: Option<u8>,
+    /// Configured ICC display profile path, if any.
+    ///
+    /// Niri currently uses the profile's `vcgt` tag for hardware calibration. This does not imply
+    /// full ICC characterization or HDR color conversion.
+    #[serde(default)]
+    pub icc_profile: Option<String>,
 }
 
 /// Output mode.
