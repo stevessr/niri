@@ -488,6 +488,7 @@ impl SessionLockHandler for State {
         // so clearing focus here is the fail-closed boundary for already-created
         // virtual keyboard objects.
         let serial = SERIAL_COUNTER.next_serial();
+        self.niri.agent_pointer_targets.clear();
         for seat in self.niri.agent_seats.clone() {
             if let Some(keyboard) = seat.get_keyboard() {
                 keyboard.set_focus(self, None, serial);
@@ -600,7 +601,22 @@ impl ForeignToplevelHandler for State {
             }
 
             if let Some(keyboard) = agent_seat.get_keyboard() {
-                keyboard.set_focus(self, Some(wl_surface), SERIAL_COUNTER.next_serial());
+                // Drop dead resources opportunistically, then bind the target
+                // to this client's concrete wl_seat resource. A new Wayland
+                // connection selecting the same agent Seat starts unbound.
+                self.niri.agent_pointer_targets.retain(|seat, surface| {
+                    seat.is_alive() && surface.is_alive()
+                });
+                self.niri
+                    .agent_pointer_targets
+                    .insert(wl_seat.clone(), wl_surface.clone());
+
+                keyboard.set_focus(
+                    self,
+                    Some(wl_surface.clone()),
+                    SERIAL_COUNTER.next_serial(),
+                );
+
                 // Tell the protocol dispatcher that this was an isolated
                 // activation so it can acknowledge activation only to the
                 // requesting management client.
