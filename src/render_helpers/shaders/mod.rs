@@ -15,6 +15,7 @@ pub struct Shaders {
     pub shadow: Option<ShaderProgram>,
     pub clipped_surface: Option<GlesTexProgram>,
     pub postprocess_and_clip: Option<GlesTexProgram>,
+    pub output_hdr: Option<GlesTexProgram>,
     pub resize: Option<ShaderProgram>,
     pub gradient_fade: Option<GlesTexProgram>,
     pub blur: Option<BlurProgram>,
@@ -126,6 +127,26 @@ impl Shaders {
             })
             .ok();
 
+        let output_hdr = renderer
+            .compile_custom_texture_shader(
+                concat!(
+                    include_str!("clipped_surface.frag"),
+                    include_str!("rounding_alpha.frag"),
+                    include_str!("output_hdr.frag"),
+                ),
+                &[
+                    UniformName::new("niri_scale", UniformType::_1f),
+                    UniformName::new("geo_size", UniformType::_2f),
+                    UniformName::new("corner_radius", UniformType::_4f),
+                    UniformName::new("input_to_geo", UniformType::Matrix3x3),
+                    UniformName::new("sdr_white_nits", UniformType::_1f),
+                ],
+            )
+            .map_err(|err| {
+                warn!("error compiling output HDR shader: {err:?}");
+            })
+            .ok();
+
         let resize = compile_resize_program(renderer, include_str!("resize.frag"))
             .map_err(|err| {
                 warn!("error compiling resize shader: {err:?}");
@@ -153,6 +174,7 @@ impl Shaders {
             shadow,
             clipped_surface,
             postprocess_and_clip,
+            output_hdr,
             resize,
             gradient_fade,
             blur,
