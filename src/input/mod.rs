@@ -513,12 +513,31 @@ impl State {
     fn on_agent_pointer_axis(
         &mut self,
         seat: &Seat<State>,
-        _target: Option<&WlSurface>,
+        target: Option<&WlSurface>,
         event: VirtualPointerAxisEvent,
     ) {
         let Some(pointer) = seat.get_pointer() else {
             return;
         };
+
+        // A fresh CUA scroll session can emit an axis frame without first
+        // moving its virtual pointer. Re-pick focus against the client-local
+        // activation target so a previous session's pointer focus cannot
+        // receive the scroll.
+        if let Some(target) = target {
+            let location = pointer.current_location();
+            let under = self.niri.agent_target_contents(target, location);
+            pointer.motion(
+                self,
+                under.surface,
+                &MotionEvent {
+                    location,
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: event.time(),
+                },
+            );
+            pointer.frame(self);
+        }
 
         let source = event.source();
         let mut frame = AxisFrame::new(event.time()).source(source);
