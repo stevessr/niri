@@ -1562,6 +1562,38 @@ impl Tty {
 
         let vrr_enabled = compositor.vrr_enabled();
 
+        let hdr_sdr_white_nits = if let Some(hdr) = config.hdr.as_ref() {
+            match enable_hdr10_connector(
+                &device.drm,
+                connector.handle(),
+                compositor.format(),
+                config.max_bpc,
+                hdr,
+            ) {
+                Ok(white) => {
+                    info!(
+                        "output {connector_name:?}: enabling experimental HDR10 output, SDR white {white:.1} nits"
+                    );
+                    Some(white)
+                }
+                Err(err) => {
+                    warn!(
+                        "output {connector_name:?}: cannot enable experimental HDR10: {err:?}; keeping SDR"
+                    );
+                    if let Err(reset_err) =
+                        disable_hdr_connector(&device.drm, connector.handle(), config.max_bpc)
+                    {
+                        warn!(
+                            "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
+                        );
+                    }
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let vblank_frame_name =
             tracy_client::FrameName::new_leak(format!("vblank on {connector_name}"));
         let time_since_presentation_plot_name = tracy_client::PlotName::new_leak(format!(
@@ -1591,6 +1623,7 @@ impl Tty {
         assert!(res.is_none(), "crtc must not have already existed");
 
         niri.add_output(output.clone(), Some(refresh_interval(mode)), vrr_enabled);
+        niri.set_output_hdr_transform(&output, hdr_sdr_white_nits);
 
         if niri.monitors_active {
             // Redraw the new monitor.
