@@ -2251,74 +2251,18 @@ impl Tty {
                 });
 
                 let props = ConnectorProperties::try_new(&device.drm, connector.handle()).ok();
-                let max_bpc_prop = props.as_ref().and_then(|p| p.find(c"max bpc").ok());
-                let max_bpc = max_bpc_prop.and_then(|(info, value)| {
-                    info.value_type()
-                        .convert_value(*value)
-                        .as_unsigned_range()
-                        .map(|v| v as u8)
-                });
-                let drm_max_bpc = max_bpc_prop.and_then(|(info, _)| {
-                    let property::ValueType::UnsignedRange(_, max) = info.value_type() else {
-                        return None;
-                    };
-                    u8::try_from(*max).ok()
-                });
-
-                let drm_hdr_metadata = props
+                let max_bpc = props
                     .as_ref()
-                    .is_some_and(|p| p.find(c"HDR_OUTPUT_METADATA").is_ok());
-                let colorspace = props.as_ref().and_then(|p| p.find(c"Colorspace").ok());
-                let drm_colorspace = colorspace.is_some();
-                let drm_bt2020_rgb = colorspace
-                    .is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_RGB"));
-                let drm_bt2020_ycc = colorspace
-                    .is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_YCC"));
-                let drm_bt2020_cycc = colorspace
-                    .is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_CYCC"));
+                    .and_then(|p| p.find(c"max bpc").ok())
+                    .and_then(|(info, value)| {
+                        info.value_type()
+                            .convert_value(*value)
+                            .as_unsigned_range()
+                            .map(|v| v as u8)
+                    });
 
-                let mut hdr_capabilities = niri_ipc::HdrCapabilities {
-                    drm_hdr_metadata,
-                    drm_colorspace,
-                    drm_bt2020_rgb,
-                    drm_bt2020_ycc,
-                    drm_bt2020_cycc,
-                    drm_max_bpc,
-                    ..Default::default()
-                };
-
-                match get_edid_data(&device.drm, connector.handle()) {
-                    Ok(data) => {
-                        hdr_capabilities.edid_available = true;
-                        match parse_edid_hdr_capabilities(&data) {
-                            Ok(edid) => {
-                                hdr_capabilities.static_metadata = edid.static_metadata;
-                                hdr_capabilities.traditional_hdr = edid.traditional_hdr;
-                                hdr_capabilities.pq = edid.pq;
-                                hdr_capabilities.hlg = edid.hlg;
-                                hdr_capabilities.static_metadata_type1 =
-                                    edid.static_metadata_type1;
-                                hdr_capabilities.bt2020_cycc = edid.bt2020_cycc;
-                                hdr_capabilities.bt2020_ycc = edid.bt2020_ycc;
-                                hdr_capabilities.bt2020_rgb = edid.bt2020_rgb;
-                                hdr_capabilities.max_luminance = edid.max_luminance;
-                                hdr_capabilities.max_frame_average_luminance =
-                                    edid.max_frame_average_luminance;
-                                hdr_capabilities.min_luminance = edid.min_luminance;
-                            }
-                            Err(err) => {
-                                debug!(
-                                    "output {connector_name:?}: could not parse EDID HDR capabilities: {err:?}"
-                                );
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        debug!(
-                            "output {connector_name:?}: could not read EDID for HDR capabilities: {err:?}"
-                        );
-                    }
-                }
+                let hdr_capabilities =
+                    query_hdr_capabilities(&device.drm, connector.handle());
 
                 let ipc_output = niri_ipc::Output {
                     name: connector_name,
@@ -3484,6 +3428,73 @@ fn get_edid_info(
 ) -> anyhow::Result<libdisplay_info::info::Info> {
     let data = get_edid_data(device, connector)?;
     libdisplay_info::info::Info::parse_edid(&data).context("error parsing EDID")
+}
+
+fn query_hdr_capabilities(
+    device: &DrmDevice,
+    connector: connector::Handle,
+) -> niri_ipc::HdrCapabilities {
+    let props = ConnectorProperties::try_new(device, connector).ok();
+    let max_bpc_prop = props.as_ref().and_then(|p| p.find(c"max bpc").ok());
+    let drm_max_bpc = max_bpc_prop.and_then(|(info, _)| {
+        let property::ValueType::UnsignedRange(_, max) = info.value_type() else {
+            return None;
+        };
+        u8::try_from(*max).ok()
+    });
+
+    let drm_hdr_metadata = props
+        .as_ref()
+        .is_some_and(|p| p.find(c"HDR_OUTPUT_METADATA").is_ok());
+    let colorspace = props.as_ref().and_then(|p| p.find(c"Colorspace").ok());
+    let drm_colorspace = colorspace.is_some();
+    let drm_bt2020_rgb =
+        colorspace.is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_RGB"));
+    let drm_bt2020_ycc =
+        colorspace.is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_YCC"));
+    let drm_bt2020_cycc =
+        colorspace.is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_CYCC"));
+
+    let mut capabilities = niri_ipc::HdrCapabilities {
+        drm_hdr_metadata,
+        drm_colorspace,
+        drm_bt2020_rgb,
+        drm_bt2020_ycc,
+        drm_bt2020_cycc,
+        drm_max_bpc,
+        ..Default::default()
+    };
+
+    let Ok(data) = get_edid_data(device, connector) else {
+        return capabilities;
+    };
+    capabilities.edid_available = true;
+
+    let Ok(edid) = parse_edid_hdr_capabilities(&data) else {
+        return capabilities;
+    };
+    capabilities.static_metadata = edid.static_metadata;
+    capabilities.traditional_hdr = edid.traditional_hdr;
+    capabilities.pq = edid.pq;
+    capabilities.hlg = edid.hlg;
+    capabilities.static_metadata_type1 = edid.static_metadata_type1;
+    capabilities.bt2020_cycc = edid.bt2020_cycc;
+    capabilities.bt2020_ycc = edid.bt2020_ycc;
+    capabilities.bt2020_rgb = edid.bt2020_rgb;
+    capabilities.max_luminance = edid.max_luminance;
+    capabilities.max_frame_average_luminance = edid.max_frame_average_luminance;
+    capabilities.min_luminance = edid.min_luminance;
+    capabilities
+}
+
+fn hdr10_signalling_ready(capabilities: &niri_ipc::HdrCapabilities) -> bool {
+    capabilities.edid_available
+        && capabilities.pq
+        && capabilities.static_metadata_type1
+        && (capabilities.bt2020_rgb || capabilities.bt2020_ycc)
+        && capabilities.drm_hdr_metadata
+        && (capabilities.drm_bt2020_rgb || capabilities.drm_bt2020_ycc)
+        && capabilities.drm_max_bpc.is_some_and(|max_bpc| max_bpc >= 10)
 }
 
 fn enum_property_has_value(info: &property::Info, name: &std::ffi::CStr) -> bool {
