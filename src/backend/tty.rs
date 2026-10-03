@@ -722,21 +722,71 @@ impl Tty {
                     // Refresh the connectors.
                     self.device_changed(node.dev_id(), niri, true);
 
-                    // Apply pending gamma changes and restore our existing gamma.
+                    // Apply pending gamma changes, restore our existing gamma, and restore
+                    // connector HDR/SDR signalling after DRM mastership was reacquired.
                     let device = self.devices.get_mut(&node).unwrap();
-                    for surface in device.surfaces.values_mut() {
-                        if let Ok(mut props) =
-                            ConnectorProperties::try_new(&device.drm, surface.connector)
-                        {
-                            let max_bpc = self
-                                .config
-                                .borrow()
-                                .outputs
-                                .find(&surface.name)
-                                .and_then(|o| o.max_bpc);
-                            set_connector_properties(&mut props, max_bpc, true);
+                    for (&crtc, surface) in device.surfaces.iter_mut() {
+                        let config = self
+                            .config
+                            .borrow()
+                            .outputs
+                            .find(&surface.name)
+                            .cloned()
+                            .unwrap_or_default();
+
+                        let output = niri
+                            .global_space
+                            .outputs()
+                            .find(|output| {
+                                let tty_state: &TtyOutputState =
+                                    output.user_data().get().unwrap();
+                                tty_state.node == node && tty_state.crtc == crtc
+                            })
+                            .cloned();
+
+                        let hdr_sdr_white_nits = if let Some(hdr) = config.hdr.as_ref() {
+                            match enable_hdr10_connector(
+                                &device.drm,
+                                surface.connector,
+                                surface.compositor.format(),
+                                config.max_bpc,
+                                hdr,
+                            ) {
+                                Ok(white) => Some(white),
+                                Err(err) => {
+                                    warn!(
+                                        "output {:?}: cannot restore experimental HDR10 after resume: {err:?}; keeping SDR",
+                                        surface.name.connector
+                                    );
+                                    if let Err(reset_err) = disable_hdr_connector(
+                                        &device.drm,
+                                        surface.connector,
+                                        config.max_bpc,
+                                    ) {
+                                        warn!(
+                                            "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
+                                            surface.name.connector
+                                        );
+                                    }
+                                    None
+                                }
+                            }
                         } else {
-                            warn!("failed to get connector properties");
+                            if let Err(err) = disable_hdr_connector(
+                                &device.drm,
+                                surface.connector,
+                                config.max_bpc,
+                            ) {
+                                warn!(
+                                    "output {:?}: failed to restore SDR connector properties: {err:?}",
+                                    surface.name.connector
+                                );
+                            }
+                            None
+                        };
+
+                        if let Some(output) = output {
+                            niri.set_output_hdr_transform(&output, hdr_sdr_white_nits);
                         }
 
                         if let Some(gamma_props) = &mut surface.gamma_props {
