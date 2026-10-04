@@ -4012,10 +4012,9 @@ fn enable_hdr10_connector(
     );
 
     let capabilities = query_hdr_capabilities(device, connector);
-    ensure!(
-        hdr10_signalling_ready(&capabilities),
-        "sink/DRM path does not satisfy HDR10 signalling prerequisites"
-    );
+    let signal_path = capabilities
+        .hdr10_signal_path()
+        .context("sink/DRM path does not satisfy HDR10 signalling prerequisites")?;
 
     if let Some(max_bpc) = configured_max_bpc {
         ensure!(
@@ -4030,7 +4029,7 @@ fn enable_hdr10_connector(
     let previous_max_bpc = props.max_bpc_value().ok();
     props.set_max_bpc(max_bpc)?;
     let sdr_white_nits = hdr.sdr_white_nits();
-    props.set_hdr10(sdr_white_nits)?;
+    props.set_hdr10(sdr_white_nits, signal_path)?;
     props.commit()?;
 
     Ok((sdr_white_nits, previous_max_bpc))
