@@ -3802,10 +3802,40 @@ impl<'a> ConnectorProperties<'a> {
             }
         }
 
+        // Linux 2026 added a generic connector "color format" property. If present, restore it
+        // to AUTO together with the HDR colorspace so SDR mode does not inherit a forced RGB/YUV
+        // transport choice.
+        if let Ok((info, value)) = self.find(c"color format") {
+            let property::ValueType::Enum(values) = info.value_type() else {
+                bail!("color format has wrong property type")
+            };
+            let auto = values
+                .values()
+                .1
+                .iter()
+                .find(|value| value.name() == c"AUTO")
+                .context("color format property has no AUTO value")?
+                .value();
+            if *value != auto {
+                self.requests
+                    .add_raw_property(self.connector.into(), info.handle(), auto);
+                self.has_change = true;
+            }
+        }
+
         Ok(())
     }
 
-    fn set_hdr10(&mut self, sdr_white_nits: f32) -> anyhow::Result<()> {
+    fn set_hdr10(
+        &mut self,
+        sdr_white_nits: f32,
+        signal_path: niri_ipc::HdrSignalPath,
+    ) -> anyhow::Result<()> {
+        let (colorspace_name, color_format_name) = match signal_path {
+            niri_ipc::HdrSignalPath::Rgb => (c"BT2020_RGB", c"RGB"),
+            niri_ipc::HdrSignalPath::Yuv444 => (c"BT2020_YCC", c"YUV 4:4:4"),
+        };
+
         let (colorspace_info, colorspace_value) = self.find(c"Colorspace")?;
         let property::ValueType::Enum(values) = colorspace_info.value_type() else {
             bail!("Colorspace has wrong property type")
@@ -3814,8 +3844,13 @@ impl<'a> ConnectorProperties<'a> {
             .values()
             .1
             .iter()
-            .find(|value| value.name() == c"BT2020_RGB" || value.name() == c"BT2020_YCC")
-            .context("DRM connector does not expose BT.2020 RGB/YCC")?
+            .find(|value| value.name() == colorspace_name)
+            .with_context(|| {
+                format!(
+                    "DRM connector does not expose {}",
+                    colorspace_name.to_string_lossy()
+                )
+            })?
             .value();
 
         if *colorspace_value != colorspace {
@@ -3825,6 +3860,38 @@ impl<'a> ConnectorProperties<'a> {
                 colorspace,
             );
             self.has_change = true;
+        }
+
+        if let Ok((format_info, format_value)) = self.find(c"color format") {
+            let property::ValueType::Enum(values) = format_info.value_type() else {
+                bail!("color format has wrong property type")
+            };
+            let color_format = values
+                .values()
+                .1
+                .iter()
+                .find(|value| value.name() == color_format_name)
+                .with_context(|| {
+                    format!(
+                        "DRM connector cannot explicitly select {}",
+                        color_format_name.to_string_lossy()
+                    )
+                })?
+                .value();
+
+            if *format_value != color_format {
+                self.requests.add_raw_property(
+                    self.connector.into(),
+                    format_info.handle(),
+                    color_format,
+                );
+                self.has_change = true;
+            }
+        } else {
+            ensure!(
+                signal_path == niri_ipc::HdrSignalPath::Rgb,
+                "YCbCr HDR requires the DRM connector color format property"
+            );
         }
 
         let (metadata_info, _) = self.find(c"HDR_OUTPUT_METADATA")?;
