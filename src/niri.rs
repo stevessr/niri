@@ -4448,7 +4448,9 @@ impl Niri {
             }
         }
 
-        self.fill_xray_elements(ctx.as_gles(), output);
+        if let Some(gles_ctx) = ctx.as_gles() {
+            self.fill_xray_elements(gles_ctx, output);
+        }
 
         // Reborrow to shorten lifetime to be able to put in xray.
         let mut ctx = ctx.r();

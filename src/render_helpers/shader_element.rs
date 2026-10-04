@@ -298,7 +298,9 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
     ) -> Result<(), GlesError> {
         let _span = tracy_client::span!("ShaderRenderElement::draw");
 
-        let frame = frame.as_gles_frame();
+        let Some(frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
 
         let Some(shader) = Shaders::get_from_frame(frame).program(self.program) else {
             return Ok(());
@@ -530,8 +532,10 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ShaderRenderElement {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), TtyRendererError<'render>> {
-        let frame = frame.as_gles_frame();
+    ) -> Result<(), TtyRendererError> {
+        let Some(frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
 
         RenderElement::<GlesRenderer>::draw(self, frame, src, dst, damage, opaque_regions, cache)?;
 

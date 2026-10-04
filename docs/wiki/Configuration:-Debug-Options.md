@@ -388,6 +388,18 @@ binds {
 }
 ```
 
+### `vulkan-renderer`
+
+Renders using Vulkan instead of OpenGL ES on the TTY backend.
+
+This is experimental. Effects requiring custom shaders (borders, shadows, rounded corners, blur, window animations, custom animation shaders, HDR tone mapping) are not implemented on the Vulkan renderer yet and will not render.
+
+```kdl
+debug {
+    vulkan-renderer
+}
+```
+
 #### `debug-toggle-damage`
 
 <sup>Since: 0.1.6</sup>

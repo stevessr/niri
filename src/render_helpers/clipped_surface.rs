@@ -100,7 +100,7 @@ impl<R: NiriRenderer> ClippedSurfaceRenderElement<R> {
     }
 
     pub fn shader(renderer: &mut R) -> Option<&GlesTexProgram> {
-        Shaders::get(renderer).clipped_surface.as_ref()
+        Shaders::get(renderer)?.clipped_surface.as_ref()
     }
 
     pub fn will_clip(
@@ -270,13 +270,26 @@ impl<'render> RenderElement<TtyRenderer<'render>>
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), TtyRendererError<'render>> {
-        frame
-            .as_gles_frame()
-            .override_default_tex_program(self.program.clone(), self.compute_uniforms());
-        RenderElement::draw(&self.inner, frame, src, dst, damage, opaque_regions, cache)?;
-        frame.as_gles_frame().clear_tex_program_override();
-        Ok(())
+    ) -> Result<(), TtyRendererError> {
+        if let Some(gles_frame) = frame.as_gles_frame() {
+            gles_frame.override_default_tex_program(self.program.clone(), self.compute_uniforms());
+        }
+
+        let result = RenderElement::draw(
+            &self.inner,
+            frame,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            cache,
+        );
+
+        if let Some(gles_frame) = frame.as_gles_frame() {
+            gles_frame.clear_tex_program_override();
+        }
+
+        result
     }
 
     fn underlying_storage(
