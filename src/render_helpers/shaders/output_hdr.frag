@@ -7,10 +7,15 @@
 uniform float sdr_white_nits;
 
 vec3 srgb_to_linear(vec3 c) {
-    vec3 low = c / 12.92;
-    vec3 high = pow((c + 0.055) / 1.055, vec3(2.4));
-    vec3 use_high = step(vec3(0.04045), c);
-    return mix(low, high, use_high);
+    // Use a symmetric extension outside [0, 1]. The RGBA16F HDR scene may contain values above
+    // SDR white and negative Rec.709 components while carrying BT.2020 colors. Keeping those
+    // values until the final Rec.2020 conversion avoids clipping wide gamut content early.
+    vec3 sign_c = sign(c);
+    vec3 abs_c = abs(c);
+    vec3 low = abs_c / 12.92;
+    vec3 high = pow((abs_c + 0.055) / 1.055, vec3(2.4));
+    vec3 use_high = step(vec3(0.04045), abs_c);
+    return sign_c * mix(low, high, use_high);
 }
 
 vec3 rec709_to_rec2020(vec3 c) {
@@ -36,7 +41,7 @@ vec3 linear_nits_to_pq(vec3 nits) {
 vec4 postprocess(vec4 color) {
     // The output framebuffer is expected to be opaque, but preserve alpha for correctness if this
     // element is reused for a non-opaque target later.
-    vec3 linear709 = srgb_to_linear(clamp(color.rgb, 0.0, 1.0));
+    vec3 linear709 = srgb_to_linear(color.rgb);
     vec3 linear2020 = max(rec709_to_rec2020(linear709), vec3(0.0));
     vec3 pq = linear_nits_to_pq(linear2020 * sdr_white_nits);
     return vec4(pq, color.a);
