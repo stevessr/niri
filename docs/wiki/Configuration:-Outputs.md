@@ -373,9 +373,9 @@ output "DP-1" {
 The `hdr` node is fail-closed. Niri enables it only when all of the following are true:
 
 - the EDID advertises PQ and Static Metadata Type 1;
-- there is at least one complete BT.2020 signal path shared by the sink and DRM: niri prefers
-  BT.2020 RGB, and may use BT.2020 YCC only when DRM exposes the modern `color format` property
-  and can explicitly select YUV 4:4:4;
+- there is at least one complete BT.2020 signal path shared by the sink and DRM, and DRM exposes
+  the modern `color format` property so niri can explicitly lock the wire encoding; niri prefers
+  BT.2020 RGB and otherwise may use BT.2020 YCC with YUV 4:4:4;
 - DRM exposes `HDR_OUTPUT_METADATA` and the matching BT.2020 `Colorspace` value;
 - the connector's `max bpc` property supports at least 10 bpc;
 - the DRM compositor actually selected the 10-bit `ABGR2101010` swapchain format.
@@ -406,9 +406,10 @@ Use `niri msg outputs` to inspect whether HDR was requested versus actually enab
 HDR10 signalling path, sink capabilities, DRM BT.2020/color-format support and the connector's
 maximum BPC before enabling it.
 
-On kernels/drivers without the `color format` property, niri intentionally treats the link as
-RGB-only for HDR. This matches the legacy HDMI default while avoiding a YCC Colorspace value that
-does not necessarily match the actual wire encoding.
+On kernels/drivers without the `color format` property, experimental HDR10 remains inactive.
+This is intentionally fail-closed: an automatic link format may fall back from RGB to YCbCr for
+bandwidth reasons, so niri does not advertise a BT.2020 Colorspace unless it can also lock the
+matching wire encoding.
 
 ### `hot-corners`
 
