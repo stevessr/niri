@@ -2911,11 +2911,29 @@ impl Tty {
                         "output {:?}: error resetting gamma for HDR output: {err:?}",
                         output.name()
                     );
+                    self.set_icc_profile_runtime_state(
+                        &output,
+                        niri_ipc::IccProfileState::Error,
+                        Some(format!("{err:#}")),
+                    );
+                } else {
+                    let state = if profile.is_some() {
+                        niri_ipc::IccProfileState::BypassedHdr
+                    } else {
+                        niri_ipc::IccProfileState::Disabled
+                    };
+                    self.set_icc_profile_runtime_state(&output, state, None);
                 }
                 continue;
             }
 
             if niri.gamma_control_manager_state.is_active(&output) {
+                let state = if profile.is_some() {
+                    niri_ipc::IccProfileState::OverriddenGammaControl
+                } else {
+                    niri_ipc::IccProfileState::Disabled
+                };
+                self.set_icc_profile_runtime_state(&output, state, None);
                 continue;
             }
 
