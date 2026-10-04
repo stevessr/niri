@@ -113,6 +113,7 @@ impl Winit {
                 hdr_requested: false,
                 hdr_sdr_white_nits: None,
                 hdr_enabled: false,
+                hdr_error: None,
             },
         )])));
 
