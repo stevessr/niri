@@ -2414,6 +2414,8 @@ impl Tty {
                     logical,
                     max_bpc,
                     icc_profile: None,
+                    icc_profile_state: Some(surface.icc_profile_state),
+                    icc_profile_error: surface.icc_profile_error.clone(),
                     hdr_capabilities: Some(hdr_capabilities),
                     hdr_requested: false,
                     hdr_sdr_white_nits: None,
