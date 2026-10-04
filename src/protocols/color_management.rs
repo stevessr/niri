@@ -1,9 +1,4 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
-};
-
-use smithay::output::Output;
+use std::sync::atomic::{AtomicBool, Ordering};
 use smithay::reexports::wayland_protocols::wp::color_management::v1::server::{
     wp_color_management_output_v1::{self as output, WpColorManagementOutputV1},
     wp_color_management_surface_feedback_v1::{
@@ -24,6 +19,7 @@ use smithay::wayland::{compositor, Dispatch2, GlobalDispatch2};
 use crate::color_management::{
     SurfaceColorDescription, SurfaceColorState, SurfaceRenderIntent,
 };
+use crate::protocols::EmptyData;
 
 const VERSION: u32 = 1;
 const SRGB_IDENTITY: u32 = 1;
@@ -57,7 +53,7 @@ impl ColorManagementManagerState {
             + Dispatch<WpColorManagementSurfaceV1, SurfaceData>
             + Dispatch<WpColorManagementSurfaceFeedbackV1, SurfaceFeedbackData>
             + Dispatch<WpImageDescriptionV1, ImageDescriptionData>
-            + Dispatch<WpImageDescriptionInfoV1, ()>
+            + Dispatch<WpImageDescriptionInfoV1, EmptyData>
             + ColorManagementHandler
             + 'static,
         F: for<'c> Fn(&'c Client) -> bool + Send + Sync + 'static,
@@ -444,7 +440,7 @@ where
 
 impl<D> Dispatch2<WpImageDescriptionV1, D> for ImageDescriptionData
 where
-    D: Dispatch<WpImageDescriptionInfoV1, ()> + ColorManagementHandler + 'static,
+    D: Dispatch<WpImageDescriptionInfoV1, EmptyData> + ColorManagementHandler + 'static,
 {
     fn request(
         &self,
@@ -473,7 +469,7 @@ where
                     return;
                 }
 
-                let info = data_init.init(information, ());
+                let info = data_init.init(information, EmptyData);
                 match self.color {
                     SurfaceColorDescription::Srgb => {
                         info.primaries(
@@ -492,7 +488,7 @@ where
     }
 }
 
-impl<D> Dispatch2<WpImageDescriptionInfoV1, D> for ()
+impl<D> Dispatch2<WpImageDescriptionInfoV1, D> for EmptyData
 where
     D: 'static,
 {
@@ -515,6 +511,3 @@ pub fn surface_color_state(surface: &WlSurface) -> SurfaceColorState {
     })
 }
 
-pub fn output_exists(output: &WlOutput) -> bool {
-    Output::from_resource(output).is_some()
-}
