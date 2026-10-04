@@ -2273,6 +2273,64 @@ impl OutputAction {
 mod tests {
     use super::*;
 
+    fn hdr10_base_capabilities() -> HdrCapabilities {
+        HdrCapabilities {
+            edid_available: true,
+            pq: true,
+            static_metadata_type1: true,
+            drm_hdr_metadata: true,
+            drm_max_bpc: Some(10),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hdr10_prefers_rgb_on_legacy_connectors() {
+        let capabilities = HdrCapabilities {
+            bt2020_rgb: true,
+            drm_bt2020_rgb: true,
+            ..hdr10_base_capabilities()
+        };
+
+        assert_eq!(
+            capabilities.hdr10_signal_path(),
+            Some(HdrSignalPath::Rgb)
+        );
+    }
+
+    #[test]
+    fn hdr10_requires_explicit_color_format_for_yuv() {
+        let legacy = HdrCapabilities {
+            bt2020_ycc: true,
+            drm_bt2020_ycc: true,
+            ..hdr10_base_capabilities()
+        };
+        assert_eq!(legacy.hdr10_signal_path(), None);
+
+        let explicit_yuv = HdrCapabilities {
+            drm_color_format: true,
+            drm_yuv444: true,
+            ..legacy
+        };
+        assert_eq!(
+            explicit_yuv.hdr10_signal_path(),
+            Some(HdrSignalPath::Yuv444)
+        );
+    }
+
+    #[test]
+    fn hdr10_respects_explicit_rgb_format_support() {
+        let capabilities = HdrCapabilities {
+            bt2020_rgb: true,
+            drm_bt2020_rgb: true,
+            drm_color_format: true,
+            drm_rgb444: false,
+            ..hdr10_base_capabilities()
+        };
+
+        assert_eq!(capabilities.hdr10_signal_path(), None);
+    }
+
     #[test]
     fn parse_size_change() {
         assert_eq!(
