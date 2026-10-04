@@ -327,8 +327,13 @@ The calibration is reapplied after output configuration changes, reconnects and 
 A Wayland gamma-control client may temporarily override it; when the client releases the output,
 niri restores the configured ICC calibration.
 
+`niri msg outputs` reports the runtime calibration state separately from the configured path:
+`applied`, suspended for HDR, temporarily overridden by gamma-control, or an apply error. The JSON
+IPC exposes the same state as `icc_profile_state` and the last failure as
+`icc_profile_error`.
+
 If the profile cannot be read, has no supported `vcgt` tag, or the output has no programmable
-gamma LUT, niri logs the error and resets that output to a linear gamma ramp.
+gamma LUT, niri records the error, logs it, and resets that output to a linear gamma ramp.
 
 Use the IPC output actions to change the profile without editing the config file:
 
