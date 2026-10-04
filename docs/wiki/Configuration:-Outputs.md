@@ -398,6 +398,12 @@ ICC `vcgt` calibration and the wlr gamma-control protocol are suspended while HD
 because a downstream hardware gamma ramp would corrupt the PQ transfer function. They are restored
 when HDR is disabled.
 
+HDR connector programming is reversible. Before the first successful HDR activation niri records
+the connector's current `max bpc`, `Colorspace`, and `color format` values. Disabling HDR (or
+falling back after a later activation failure) restores those pre-HDR values, except that an
+explicitly configured `max-bpc` remains authoritative. This prevents an HDR toggle from silently
+destroying a pre-existing connector signal configuration.
+
 Runtime control is also available:
 
 ```sh
@@ -406,10 +412,11 @@ niri msg output DP-1 hdr on --sdr-white-nits 203
 niri msg output DP-1 hdr off
 ```
 
-Use `niri msg outputs` to inspect whether HDR was requested versus actually enabled, the chosen
-HDR10 signalling path, sink capabilities, DRM BT.2020/color-format support and the connector's
-maximum BPC before enabling it. If HDR was requested but activation failed, the last backend error
-is shown as `HDR activation error` and is also available as `hdr_error` in JSON IPC.
+Use `niri msg outputs` to inspect whether HDR was requested versus actually enabled, the selected
+runtime HDR10 wire path (BT.2020 RGB or YCbCr 4:4:4), sink capabilities, DRM
+BT.2020/color-format support and the connector BPC range. JSON IPC exposes the actual active path as
+`hdr_signal_path`. If HDR was requested but activation failed, the last backend error is shown as
+`HDR activation error` and is also available as `hdr_error`.
 
 On kernels/drivers without the `color format` property, experimental HDR10 remains inactive.
 This is intentionally fail-closed: an automatic link format may fall back from RGB to YCbCr for
