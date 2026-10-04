@@ -2268,17 +2268,70 @@ impl Tty {
         output: &Output,
         profile: Option<&str>,
     ) -> anyhow::Result<()> {
-        let Some(profile) = profile else {
-            return self.set_gamma(output, None);
+        let result = (|| {
+            let Some(profile) = profile else {
+                return self.set_gamma(output, None);
+            };
+
+            let gamma_size = self.get_gamma_size(output)? as usize;
+            ensure!(gamma_size > 0, "setting gamma is not supported");
+
+            let path = Path::new(profile);
+            let path = expand_home(path)?.unwrap_or_else(|| path.to_path_buf());
+            let ramp = load_vcgt(&path, gamma_size)?;
+            self.set_gamma(output, Some(ramp))
+        })();
+
+        match result {
+            Ok(()) => {
+                let state = if profile.is_some() {
+                    niri_ipc::IccProfileState::Applied
+                } else {
+                    niri_ipc::IccProfileState::Disabled
+                };
+                self.set_icc_profile_runtime_state(output, state, None);
+                Ok(())
+            }
+            Err(err) => {
+                self.set_icc_profile_runtime_state(
+                    output,
+                    niri_ipc::IccProfileState::Error,
+                    Some(format!("{err:#}")),
+                );
+                Err(err)
+            }
+        }
+    }
+
+    pub fn set_icc_profile_runtime_state(
+        &mut self,
+        output: &Output,
+        state: niri_ipc::IccProfileState,
+        error: Option<String>,
+    ) {
+        let Some(tty_state) = output.user_data().get::<TtyOutputState>() else {
+            return;
         };
+        if let Some(surface) = self
+            .devices
+            .get_mut(&tty_state.node)
+            .and_then(|device| device.surfaces.get_mut(&tty_state.crtc))
+        {
+            surface.icc_profile_state = state;
+            surface.icc_profile_error.clone_from(&error);
+        }
 
-        let gamma_size = self.get_gamma_size(output)? as usize;
-        ensure!(gamma_size > 0, "setting gamma is not supported");
-
-        let path = Path::new(profile);
-        let path = expand_home(path)?.unwrap_or_else(|| path.to_path_buf());
-        let ramp = load_vcgt(&path, gamma_size)?;
-        self.set_gamma(output, Some(ramp))
+        let output_name = output.name();
+        if let Some(ipc_output) = self
+            .ipc_outputs
+            .lock()
+            .unwrap()
+            .values_mut()
+            .find(|ipc_output| ipc_output.name == output_name)
+        {
+            ipc_output.icc_profile_state = Some(state);
+            ipc_output.icc_profile_error = error;
+        }
     }
 
     pub fn set_gamma(&mut self, output: &Output, ramp: Option<Vec<u16>>) -> anyhow::Result<()> {
