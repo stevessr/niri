@@ -872,7 +872,8 @@ impl Tty {
                 drop(config);
 
                 info!(
-                    "running on the native Vulkan renderer; border, shadow, rounded clipping,                      offscreen fades and window-open shaders enabled"
+                    "running on the native Vulkan renderer; border, shadow, rounded clipping, \
+                     offscreen fades and window-open shaders enabled"
                 );
             }
 
