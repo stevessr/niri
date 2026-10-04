@@ -2319,9 +2319,27 @@ mod tests {
             pq: true,
             static_metadata_type1: true,
             drm_hdr_metadata: true,
+            drm_min_bpc: Some(8),
             drm_max_bpc: Some(10),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn hdr_bpc_selects_lowest_supported_value_at_or_above_10() {
+        let capabilities = HdrCapabilities {
+            drm_min_bpc: Some(11),
+            drm_max_bpc: Some(16),
+            ..Default::default()
+        };
+        assert_eq!(capabilities.hdr_bpc(), Some(MaxBpc::_12));
+
+        let no_hdr_bpc = HdrCapabilities {
+            drm_min_bpc: Some(6),
+            drm_max_bpc: Some(8),
+            ..Default::default()
+        };
+        assert_eq!(no_hdr_bpc.hdr_bpc(), None);
     }
 
     #[test]
