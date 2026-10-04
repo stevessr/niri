@@ -81,10 +81,10 @@ CUA's current `wtype` fallback still binds the last advertised seat; with
 Agent mode explicitly enabled, niri's agent seats are advertised after the
 primary seat, so that fallback lands on the same final agent lane.
 
-One limitation remains in current upstream CUA: its generic Wayland selector
-always chooses one "selected" seat, so multiple simultaneous CUA sessions do
-not yet distribute themselves across `niri-agent-1` and `niri-agent-2`.
-Native Wayland clients can select either seat today. Full multi-CUA lane
-assignment needs a small CUA-side seat-selection change (for example,
-session/cursor-id -> `niri-agent-N`), while this compositor side is already
-multi-seat.
+The companion CUA patch shards target-bound virtual-pointer sessions across
+the available `niri-agent-N` seats using a stable `window_id` mapping. This
+gives concurrent automation of different windows independent pointer
+location/focus lanes without changing the protocol. Keyboard compatibility
+continues to use one selected Agent seat because the current `wtype` fallback
+does not expose a seat-selection argument; each keyboard action re-activates
+its exact target on that seat before injection.
