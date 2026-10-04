@@ -1376,9 +1376,8 @@ pub enum HdrSignalPath {
 impl HdrCapabilities {
     /// Return the safest HDR10 signalling path that can be explicitly represented.
     ///
-    /// Legacy DRM connectors without a `color format` property are treated as RGB-only: HDMI
-    /// historically defaults to RGB, while using a YCC Colorspace value without also controlling
-    /// the actual wire pixel encoding could produce mismatched signalling.
+    /// A usable path requires the modern DRM `color format` property so niri can lock the
+    /// actual wire encoding to the same RGB/YUV family as the BT.2020 Colorspace value.
     pub fn hdr10_signal_path(&self) -> Option<HdrSignalPath> {
         if !self.edid_available
             || !self.pq
@@ -1391,7 +1390,8 @@ impl HdrCapabilities {
 
         if self.bt2020_rgb
             && self.drm_bt2020_rgb
-            && (!self.drm_color_format || self.drm_rgb444)
+            && self.drm_color_format
+            && self.drm_rgb444
         {
             return Some(HdrSignalPath::Rgb);
         }
@@ -2307,15 +2307,21 @@ mod tests {
     }
 
     #[test]
-    fn hdr10_prefers_rgb_on_legacy_connectors() {
-        let capabilities = HdrCapabilities {
+    fn hdr10_requires_explicit_color_format_for_rgb() {
+        let legacy = HdrCapabilities {
             bt2020_rgb: true,
             drm_bt2020_rgb: true,
             ..hdr10_base_capabilities()
         };
+        assert_eq!(legacy.hdr10_signal_path(), None);
 
+        let explicit_rgb = HdrCapabilities {
+            drm_color_format: true,
+            drm_rgb444: true,
+            ..legacy
+        };
         assert_eq!(
-            capabilities.hdr10_signal_path(),
+            explicit_rgb.hdr10_signal_path(),
             Some(HdrSignalPath::Rgb)
         );
     }
