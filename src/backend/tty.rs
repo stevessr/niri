@@ -3734,12 +3734,14 @@ fn query_hdr_capabilities(
 ) -> niri_ipc::HdrCapabilities {
     let props = ConnectorProperties::try_new(device, connector).ok();
     let max_bpc_prop = props.as_ref().and_then(|p| p.find(c"max bpc").ok());
-    let drm_max_bpc = max_bpc_prop.and_then(|(info, _)| {
-        let property::ValueType::UnsignedRange(_, max) = info.value_type() else {
-            return None;
-        };
-        u8::try_from(*max).ok()
-    });
+    let (drm_min_bpc, drm_max_bpc) = max_bpc_prop
+        .and_then(|(info, _)| {
+            let property::ValueType::UnsignedRange(min, max) = info.value_type() else {
+                return None;
+            };
+            Some((u8::try_from(*min).ok()?, u8::try_from(*max).ok()?))
+        })
+        .map_or((None, None), |(min, max)| (Some(min), Some(max)));
 
     let drm_hdr_metadata = props
         .as_ref()
@@ -3777,6 +3779,7 @@ fn query_hdr_capabilities(
         drm_yuv444,
         drm_yuv422,
         drm_yuv420,
+        drm_min_bpc,
         drm_max_bpc,
         ..Default::default()
     };
