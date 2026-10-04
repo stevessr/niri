@@ -1677,7 +1677,7 @@ impl Tty {
                             &device.drm,
                             connector.handle(),
                             config.max_bpc,
-                            None,
+                            HdrConnectorRestore::default(),
                         ) {
                             warn!(
                                 "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
