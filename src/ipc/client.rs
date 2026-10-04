@@ -7,8 +7,9 @@ use anyhow::{anyhow, bail, Context};
 use niri_config::OutputName;
 use niri_ipc::socket::Socket;
 use niri_ipc::{
-    Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
-    OutputConfigChanged, Overview, Request, Response, Transform, Window, WindowLayout,
+    Action, Cast, CastKind, CastTarget, Event, HdrSignalPath, KeyboardLayouts, LogicalOutput,
+    Mode, Output, OutputConfigChanged, Overview, Request, Response, Transform, Window,
+    WindowLayout,
 };
 use serde_json::json;
 
@@ -600,6 +601,8 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         max_bpc,
         icc_profile,
         hdr_capabilities,
+        hdr_requested,
+        hdr_sdr_white_nits,
         hdr_enabled,
     } = output;
 
@@ -693,7 +696,21 @@ fn print_output(output: Output) -> anyhow::Result<()> {
     }
 
     if hdr_enabled {
-        println!("  HDR output: enabled (experimental HDR10 compositor path)");
+        if let Some(white) = hdr_sdr_white_nits {
+            println!(
+                "  HDR output: enabled (experimental SDR→HDR10 mapping, SDR white {white:.1} cd/m²)"
+            );
+        } else {
+            println!("  HDR output: enabled (experimental SDR→HDR10 mapping)");
+        }
+    } else if hdr_requested {
+        if let Some(white) = hdr_sdr_white_nits {
+            println!(
+                "  HDR output: requested but inactive (SDR white {white:.1} cd/m²)"
+            );
+        } else {
+            println!("  HDR output: requested but inactive");
+        }
     } else {
         println!("  HDR output: disabled");
     }
@@ -779,24 +796,43 @@ fn print_output(output: Output) -> anyhow::Result<()> {
             }
         }
 
+        if hdr.drm_color_format {
+            let mut formats = Vec::new();
+            if hdr.drm_rgb444 {
+                formats.push("RGB");
+            }
+            if hdr.drm_yuv444 {
+                formats.push("YUV 4:4:4");
+            }
+            if hdr.drm_yuv422 {
+                formats.push("YUV 4:2:2");
+            }
+            if hdr.drm_yuv420 {
+                formats.push("YUV 4:2:0");
+            }
+            if formats.is_empty() {
+                println!("  DRM output color formats: property present, no known formats");
+            } else {
+                println!("  DRM output color formats: {}", formats.join(", "));
+            }
+        } else {
+            println!("  DRM output color format selection: legacy/automatic");
+        }
+
         if let Some(max_bpc) = hdr.drm_max_bpc {
             println!("  DRM maximum BPC capability: {max_bpc}");
         }
 
-        let sink_hdr10 =
-            hdr.pq && hdr.static_metadata_type1 && hdr.bt2020_rgb && hdr.bt2020_ycc;
-        let drm_hdr10 = hdr.drm_hdr_metadata
-            && (hdr.drm_bt2020_rgb || hdr.drm_bt2020_ycc)
-            && hdr.drm_max_bpc.is_some_and(|max_bpc| max_bpc >= 10);
-
-        match (sink_hdr10, drm_hdr10) {
-            (true, true) => {
-                println!(
-                    "  HDR10 signalling prerequisites: available (composition is still SDR)"
-                );
+        match hdr.hdr10_signal_path() {
+            Some(HdrSignalPath::Rgb) => {
+                println!("  HDR10 signalling path: ready via BT.2020 RGB");
             }
-            (false, _) => println!("  HDR10 signalling prerequisites: sink does not advertise them"),
-            (_, false) => println!("  HDR10 signalling prerequisites: DRM path is incomplete"),
+            Some(HdrSignalPath::Yuv444) => {
+                println!("  HDR10 signalling path: ready via BT.2020 YCbCr 4:4:4");
+            }
+            None => {
+                println!("  HDR10 signalling path: unavailable");
+            }
         }
     }
 
