@@ -3662,12 +3662,30 @@ fn query_hdr_capabilities(
     let drm_bt2020_cycc =
         colorspace.is_some_and(|(info, _)| enum_property_has_value(info, c"BT2020_CYCC"));
 
+    let color_format = props
+        .as_ref()
+        .and_then(|p| p.find(c"color format").ok());
+    let drm_color_format = color_format.is_some();
+    let drm_rgb444 =
+        color_format.is_some_and(|(info, _)| enum_property_has_value(info, c"RGB"));
+    let drm_yuv444 =
+        color_format.is_some_and(|(info, _)| enum_property_has_value(info, c"YUV 4:4:4"));
+    let drm_yuv422 =
+        color_format.is_some_and(|(info, _)| enum_property_has_value(info, c"YUV 4:2:2"));
+    let drm_yuv420 =
+        color_format.is_some_and(|(info, _)| enum_property_has_value(info, c"YUV 4:2:0"));
+
     let mut capabilities = niri_ipc::HdrCapabilities {
         drm_hdr_metadata,
         drm_colorspace,
         drm_bt2020_rgb,
         drm_bt2020_ycc,
         drm_bt2020_cycc,
+        drm_color_format,
+        drm_rgb444,
+        drm_yuv444,
+        drm_yuv422,
+        drm_yuv420,
         drm_max_bpc,
         ..Default::default()
     };
@@ -3692,17 +3710,6 @@ fn query_hdr_capabilities(
     capabilities.max_frame_average_luminance = edid.max_frame_average_luminance;
     capabilities.min_luminance = edid.min_luminance;
     capabilities
-}
-
-fn hdr10_signalling_ready(capabilities: &niri_ipc::HdrCapabilities) -> bool {
-    capabilities.edid_available
-        && capabilities.pq
-        && capabilities.static_metadata_type1
-        && capabilities.bt2020_rgb
-        && capabilities.bt2020_ycc
-        && capabilities.drm_hdr_metadata
-        && (capabilities.drm_bt2020_rgb || capabilities.drm_bt2020_ycc)
-        && capabilities.drm_max_bpc.is_some_and(|max_bpc| max_bpc >= 10)
 }
 
 fn enum_property_has_value(info: &property::Info, name: &std::ffi::CStr) -> bool {
