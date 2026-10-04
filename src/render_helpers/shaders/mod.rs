@@ -526,29 +526,40 @@ pub fn set_custom_close_program(renderer: &mut GlesRenderer, src: Option<&str>) 
 }
 
 fn compile_open_program(
-    renderer: &mut GlesRenderer,
+    renderer: &mut impl NiriRenderer,
     src: &str,
-) -> Result<ShaderProgram, GlesError> {
+) -> anyhow::Result<ShaderProgram> {
     let mut program = include_str!("open_prelude.frag").to_string();
     program.push_str(src);
     program.push_str(include_str!("open_epilogue.frag"));
 
-    ShaderProgram::compile(
-        renderer,
-        &program,
-        &[
-            UniformName::new("niri_input_to_geo", UniformType::Matrix3x3),
-            UniformName::new("niri_geo_size", UniformType::_2f),
-            UniformName::new("niri_geo_to_tex", UniformType::Matrix3x3),
-            UniformName::new("niri_progress", UniformType::_1f),
-            UniformName::new("niri_clamped_progress", UniformType::_1f),
-            UniformName::new("niri_random_seed", UniformType::_1f),
-        ],
-        &["niri_tex"],
-    )
+    let uniforms = &[
+        UniformName::new("niri_input_to_geo", UniformType::Matrix3x3),
+        UniformName::new("niri_geo_size", UniformType::_2f),
+        UniformName::new("niri_geo_to_tex", UniformType::Matrix3x3),
+        UniformName::new("niri_progress", UniformType::_1f),
+        UniformName::new("niri_clamped_progress", UniformType::_1f),
+        UniformName::new("niri_random_seed", UniformType::_1f),
+    ];
+    let textures: &[&str] = &["niri_tex"];
+
+    if renderer.as_gles_renderer().is_some() {
+        let renderer = renderer.as_gles_renderer().unwrap();
+        Ok(ShaderProgram::compile(
+            renderer,
+            &program,
+            uniforms,
+            textures,
+        )?)
+    } else if renderer.as_vulkan_renderer().is_some() {
+        let renderer = renderer.as_vulkan_renderer().unwrap();
+        ShaderProgram::compile_vulkan(renderer, &program, uniforms, textures)
+    } else {
+        anyhow::bail!("unsupported renderer")
+    }
 }
 
-pub fn set_custom_open_program(renderer: &mut GlesRenderer, src: Option<&str>) {
+pub fn set_custom_open_program(renderer: &mut impl NiriRenderer, src: Option<&str>) {
     let program = if let Some(src) = src {
         match compile_open_program(renderer, src) {
             Ok(program) => Some(program),
@@ -563,8 +574,10 @@ pub fn set_custom_open_program(renderer: &mut GlesRenderer, src: Option<&str>) {
 
     if let Some(prev) = Shaders::get(renderer).and_then(|s| s.replace_custom_open_program(program))
     {
-        if let Err(err) = prev.destroy(renderer) {
-            warn!("error destroying previous custom open shader: {err:?}");
+        if let Some(gles_renderer) = renderer.as_gles_renderer() {
+            if let Err(err) = prev.destroy(gles_renderer) {
+                warn!("error destroying previous custom open shader: {err:?}");
+            }
         }
     }
 }
