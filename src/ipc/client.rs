@@ -606,6 +606,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         hdr_requested,
         hdr_sdr_white_nits,
         hdr_enabled,
+        hdr_signal_path,
         hdr_error,
     } = output;
 
@@ -744,6 +745,15 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         }
     } else {
         println!("  HDR output: disabled");
+    }
+
+    if let Some(path) = hdr_signal_path {
+        match path {
+            HdrSignalPath::Rgb => println!("  Active HDR signal path: BT.2020 RGB"),
+            HdrSignalPath::Yuv444 => {
+                println!("  Active HDR signal path: BT.2020 YCbCr 4:4:4")
+            }
+        }
     }
 
     if let Some(hdr) = hdr_capabilities {
