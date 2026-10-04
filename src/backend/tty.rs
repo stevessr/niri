@@ -4098,8 +4098,8 @@ fn enable_hdr10_connector(
     hdr: &niri_config::output::Hdr,
 ) -> anyhow::Result<(f32, Option<u64>)> {
     ensure!(
-        format == Fourcc::Abgr2101010,
-        "DRM compositor selected {format:?}, but HDR requires the 10-bit ABGR2101010 swapchain"
+        matches!(format, Fourcc::Abgr2101010 | Fourcc::Xbgr2101010),
+        "DRM compositor selected {format:?}, but HDR requires a 10-bit BGR2101010 swapchain"
     );
 
     let capabilities = query_hdr_capabilities(device, connector);
