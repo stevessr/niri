@@ -2,12 +2,58 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{bail, ensure, Context};
+use smithay::reexports::wayland_server::DisplayHandle;
+use smithay::wayland::compositor::Cacheable;
 
 const ICC_HEADER_LEN: usize = 128;
 const TAG_TABLE_HEADER_LEN: usize = 4;
 const TAG_RECORD_LEN: usize = 12;
 const VCGT_TABLE_TYPE: u32 = 0;
 const VCGT_FORMULA_TYPE: u32 = 1;
+
+const VCGT_FORMULA_TYPE: u32 = 1;
+
+/// Color encodings niri can currently accept on a Wayland surface without changing the
+/// compositor's blending model.
+///
+/// Keep this deliberately narrow. Adding an entry here means a ready color-management-v1 image
+/// description using it is safe to attach to a surface and must remain accepted by the compositor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SurfaceColorDescription {
+    /// Standard sRGB/BT.709 primaries with the sRGB transfer function.
+    #[default]
+    Srgb,
+}
+
+/// Rendering intents niri currently accepts from color-management-v1 clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SurfaceRenderIntent {
+    /// Perceptual mapping. This is the protocol-mandated baseline intent.
+    #[default]
+    Perceptual,
+}
+
+/// Double-buffered color state attached to each wl_surface.
+///
+/// Untagged surfaces remain sRGB, matching niri's historical rendering model. Protocol handlers
+/// write the pending state and Smithay applies it together with wl_surface.commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SurfaceColorState {
+    pub description: SurfaceColorDescription,
+    pub render_intent: SurfaceRenderIntent,
+    /// Whether the state was explicitly provided through color-management-v1.
+    pub explicitly_managed: bool,
+}
+
+impl Cacheable for SurfaceColorState {
+    fn commit(&mut self, _dh: &DisplayHandle) -> Self {
+        *self
+    }
+
+    fn merge_into(self, into: &mut Self, _dh: &DisplayHandle) {
+        *into = self;
+    }
+}
 
 /// Load the display calibration stored in an ICC profile's `vcgt` tag and resample it to the
 /// hardware LUT size expected by the DRM gamma API.
