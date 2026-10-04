@@ -546,3 +546,38 @@ pub fn mat3_uniform(name: &str, mat: Mat3) -> Uniform<'_> {
         },
     )
 }
+
+
+#[cfg(test)]
+mod tests {
+    use smithay::backend::vulkan::{version::Version, Instance, PhysicalDevice};
+
+    use super::*;
+
+    #[test]
+    fn native_vulkan_border_and_shadow_shaders_compile() {
+        // CI environments are not required to expose a Vulkan device.
+        let Ok(instance) = Instance::new(Version::VERSION_1_3, None) else {
+            return;
+        };
+        let Ok(devices) = PhysicalDevice::enumerate(&instance) else {
+            return;
+        };
+        let Some(mut renderer) = devices
+            .into_iter()
+            .find_map(|device| VulkanRenderer::new(&device).ok())
+        else {
+            return;
+        };
+
+        let shaders = Shaders::compile_vulkan(&mut renderer);
+        assert!(
+            shaders.border.is_some(),
+            "native Vulkan border shader failed to compile"
+        );
+        assert!(
+            shaders.shadow.is_some(),
+            "native Vulkan shadow shader failed to compile"
+        );
+    }
+}
