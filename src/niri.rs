@@ -2673,7 +2673,11 @@ impl Niri {
         // Two seats mirrors CUA's current Hyprland isolated-input lane count. The
         // environment override is primarily useful for tests and deployments that need
         // either no agent seats or a larger fixed pool.
-        const DEFAULT_AGENT_SEAT_COUNT: usize = 2;
+        // Keep this opt-in: many generic virtual-keyboard clients simply bind
+        // the last advertised wl_seat. Advertising an unfocused agent seat by
+        // default would silently redirect those existing tools away from the
+        // user's primary seat.
+        const DEFAULT_AGENT_SEAT_COUNT: usize = 0;
         const MAX_AGENT_SEAT_COUNT: usize = 8;
         let agent_seat_count = std::env::var("NIRI_AGENT_SEATS")
             .ok()
