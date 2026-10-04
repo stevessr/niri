@@ -314,7 +314,8 @@ output "DP-1" {
 }
 ```
 
-Niri currently reads the profile's `vcgt` (video card gamma table) tag and loads it into the
+Niri currently accepts RGB display/monitor ICC profiles (device class `mntr`, device color
+space `RGB `), reads the profile's `vcgt` (video card gamma table) tag, and loads it into the
 output's hardware gamma LUT. Both table-based and formula-based ColorSync `vcgt` data are
 supported, and the curves are resampled to the LUT size exposed by the DRM driver.
 
