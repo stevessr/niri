@@ -3886,20 +3886,20 @@ impl<'a> ConnectorProperties<'a> {
         // to AUTO together with the HDR colorspace so SDR mode does not inherit a forced RGB/YUV
         // transport choice.
         if let Ok((info, value)) = self.find(c"color format") {
-            let property::ValueType::Enum(values) = info.value_type() else {
-                bail!("color format has wrong property type")
-            };
-            let auto = values
-                .values()
-                .1
-                .iter()
-                .find(|value| value.name() == c"AUTO")
-                .context("color format property has no AUTO value")?
-                .value();
-            if *value != auto {
-                self.requests
-                    .add_raw_property(self.connector.into(), info.handle(), auto);
-                self.has_change = true;
+            if let property::ValueType::Enum(values) = info.value_type() {
+                if let Some(auto) = values
+                    .values()
+                    .1
+                    .iter()
+                    .find(|value| value.name() == c"AUTO")
+                    .map(|value| value.value())
+                {
+                    if *value != auto {
+                        self.requests
+                            .add_raw_property(self.connector.into(), info.handle(), auto);
+                        self.has_change = true;
+                    }
+                }
             }
         }
 
