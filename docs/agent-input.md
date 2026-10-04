@@ -5,12 +5,14 @@ agents while preserving the physical/user seat.
 
 ## Seat model
 
-By default niri advertises two additional `wl_seat` globals:
+Agent seats are opt-in to preserve compatibility with generic Wayland tools
+that blindly bind the last advertised `wl_seat`. Start niri with, for example,
+`NIRI_AGENT_SEATS=2` to advertise:
 
 - `niri-agent-1`
 - `niri-agent-2`
 
-Set `NIRI_AGENT_SEATS=0..8` before starting niri to change the fixed pool.
+`NIRI_AGENT_SEATS` accepts `0..8`; the default is `0`.
 Each agent seat owns a distinct Smithay pointer and keyboard handle, so pointer
 location, pointer focus, keyboard focus and modifier delivery are independent
 from the primary seat.
@@ -73,10 +75,11 @@ Current `trycua/cua` generic Wayland input already:
 Its seat selector excludes the Hyprland-plugin names `Cua-Agent` and
 `Cua-Agent-2`, but preserves the last advertised ordinary seat. Upstream
 `wtype` likewise overwrites its seat binding for every advertised `wl_seat`,
-so it ends up using the last seat. Because niri advertises `niri-agent-*`
-after the primary seat, both CUA's generic virtual-pointer path and the
-`wtype` virtual-keyboard process select the same final agent seat. This keeps
-pointer and keyboard delivery isolated without moving the user's pointer/focus.
+so it ends up using the last seat. The companion CUA compatibility patch recognizes `niri-agent-*` by name and
+intentionally selects an agent seat instead of relying on registry ordering.
+CUA's current `wtype` fallback still binds the last advertised seat; with
+Agent mode explicitly enabled, niri's agent seats are advertised after the
+primary seat, so that fallback lands on the same final agent lane.
 
 One limitation remains in current upstream CUA: its generic Wayland selector
 always chooses one "selected" seat, so multiple simultaneous CUA sessions do
