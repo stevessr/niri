@@ -15,6 +15,7 @@ pub trait NiriRenderer:
     + Offscreen<GlesTexture>
     + Renderer<TextureId = Self::NiriTextureId, Error = Self::NiriError>
     + AsGlesRenderer
+    + AsVulkanRenderer
 {
     // Associated types to work around the instability of associated type bounds.
     type NiriTextureId: Texture + Clone + Send + 'static;
@@ -27,7 +28,13 @@ pub trait NiriRenderer:
 
 impl<R> NiriRenderer for R
 where
-    R: ImportAll + ImportMem + ExportMem + Bind<Dmabuf> + Offscreen<GlesTexture> + AsGlesRenderer,
+    R: ImportAll
+        + ImportMem
+        + ExportMem
+        + Bind<Dmabuf>
+        + Offscreen<GlesTexture>
+        + AsGlesRenderer
+        + AsVulkanRenderer,
     R::TextureId: Texture + Clone + Send + 'static,
     R::Error:
         std::error::Error + Send + Sync + From<<GlesRenderer as RendererSuper>::Error> + 'static,
@@ -55,6 +62,32 @@ impl AsGlesRenderer for TtyRenderer<'_> {
         match self {
             TtyRenderer::Gles(renderer) => Some(renderer.as_mut()),
             TtyRenderer::Vulkan(_) => None,
+        }
+    }
+}
+
+/// Trait for getting the underlying native Vulkan renderer, if any.
+pub trait AsVulkanRenderer {
+    fn as_vulkan_renderer(
+        &mut self,
+    ) -> Option<&mut smithay::backend::renderer::vulkan::VulkanRenderer>;
+}
+
+impl AsVulkanRenderer for GlesRenderer {
+    fn as_vulkan_renderer(
+        &mut self,
+    ) -> Option<&mut smithay::backend::renderer::vulkan::VulkanRenderer> {
+        None
+    }
+}
+
+impl AsVulkanRenderer for TtyRenderer<'_> {
+    fn as_vulkan_renderer(
+        &mut self,
+    ) -> Option<&mut smithay::backend::renderer::vulkan::VulkanRenderer> {
+        match self {
+            TtyRenderer::Gles(_) => None,
+            TtyRenderer::Vulkan(renderer) => Some(renderer.as_mut()),
         }
     }
 }
