@@ -628,5 +628,25 @@ mod tests {
             shaders.clipped_surface.is_some(),
             "native Vulkan clipped-surface shader failed to compile"
         );
+
+        let mut open = include_str!("open_prelude.frag").to_string();
+        open.push_str(
+            "vec4 open_color(vec3 coords_geo, vec3 size_geo) {\n\
+                 vec3 coords = niri_geo_to_tex * coords_geo;\n\
+                 vec4 color = texture2D(niri_tex, coords.st);\n\
+                 return color * niri_clamped_progress;\n\
+             }\n",
+        );
+        open.push_str(include_str!("open_epilogue.frag"));
+        let uniforms = [
+            UniformName::new("niri_input_to_geo", UniformType::Matrix3x3),
+            UniformName::new("niri_geo_size", UniformType::_2f),
+            UniformName::new("niri_geo_to_tex", UniformType::Matrix3x3),
+            UniformName::new("niri_progress", UniformType::_1f),
+            UniformName::new("niri_clamped_progress", UniformType::_1f),
+            UniformName::new("niri_random_seed", UniformType::_1f),
+        ];
+        ShaderProgram::compile_vulkan(&mut renderer, &open, &uniforms, &["niri_tex"])
+            .expect("native Vulkan window-open shader failed to compile");
     }
 }
