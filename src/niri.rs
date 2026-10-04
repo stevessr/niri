@@ -3196,6 +3196,13 @@ impl Niri {
         self.output_state.contains_key(output)
     }
 
+    pub fn output_hdr_sdr_white_nits(&self, output: &Output) -> Option<f32> {
+        let state = self.output_state.get(output)?;
+        state
+            .color_transform_active
+            .then_some(state.color_transform_sdr_white_nits)
+    }
+
     /// Enable or disable an output-wide compositor color transform.
     ///
     /// The TTY backend observes this state to disable all DRM plane scanout paths that could
