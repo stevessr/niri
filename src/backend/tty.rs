@@ -374,6 +374,13 @@ struct TtyOutputState {
     crtc: crtc::Handle,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct HdrConnectorRestore {
+    max_bpc: Option<u64>,
+    colorspace: Option<u64>,
+    color_format: Option<u64>,
+}
+
 struct Surface {
     name: OutputName,
     compositor: GbmDrmCompositor,
@@ -390,8 +397,8 @@ struct Surface {
     hdr_enabled: bool,
     /// Last error that prevented requested HDR from becoming active.
     hdr_error: Option<String>,
-    /// max-bpc value observed before niri first enabled HDR on this surface.
-    hdr_restore_max_bpc: Option<u64>,
+    /// Connector properties observed before niri first enabled HDR on this surface.
+    hdr_restore: HdrConnectorRestore,
     /// Tracy frame that goes from vblank to vblank.
     vblank_frame: Option<tracy_client::Frame>,
     /// Frame name for the VBlank frame.
@@ -765,9 +772,9 @@ impl Tty {
                                 config.max_bpc,
                                 hdr,
                             ) {
-                                Ok((white, previous_max_bpc)) => {
+                                Ok((white, restore)) => {
                                     if !surface.hdr_enabled {
-                                        surface.hdr_restore_max_bpc = previous_max_bpc;
+                                        surface.hdr_restore = restore;
                                     }
                                     surface.hdr_enabled = true;
                                     surface.hdr_error = None;
@@ -782,7 +789,7 @@ impl Tty {
                                         &device.drm,
                                         surface.connector,
                                         config.max_bpc,
-                                        surface.hdr_restore_max_bpc.take(),
+                                        std::mem::take(&mut surface.hdr_restore),
                                     ) {
                                         warn!(
                                             "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
@@ -799,7 +806,7 @@ impl Tty {
                                 &device.drm,
                                 surface.connector,
                                 config.max_bpc,
-                                surface.hdr_restore_max_bpc.take(),
+                                std::mem::take(&mut surface.hdr_restore),
                             ) {
                                 warn!(
                                     "output {:?}: failed to restore SDR connector properties: {err:?}",
@@ -1646,7 +1653,7 @@ impl Tty {
 
         let vrr_enabled = compositor.vrr_enabled();
 
-        let (hdr_sdr_white_nits, hdr_restore_max_bpc, hdr_error) =
+        let (hdr_sdr_white_nits, hdr_restore, hdr_error) =
             if let Some(hdr) = config.hdr.as_ref() {
                 match enable_hdr10_connector(
                     &device.drm,
@@ -1655,11 +1662,11 @@ impl Tty {
                     config.max_bpc,
                     hdr,
                 ) {
-                    Ok((white, previous_max_bpc)) => {
+                    Ok((white, restore)) => {
                         info!(
                             "output {connector_name:?}: enabling experimental HDR10 output, SDR white {white:.1} nits"
                         );
-                        (Some(white), previous_max_bpc, None)
+                        (Some(white), restore, None)
                     }
                     Err(err) => {
                         let error = format!("{err:#}");
@@ -1676,11 +1683,11 @@ impl Tty {
                                 "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
                             );
                         }
-                        (None, None, Some(error))
+                        (None, HdrConnectorRestore::default(), Some(error))
                     }
                 }
             } else {
-                (None, None, None)
+                (None, HdrConnectorRestore::default(), None)
             };
 
         let vblank_frame_name =
@@ -1705,7 +1712,7 @@ impl Tty {
             icc_profile_error: None,
             hdr_enabled: hdr_sdr_white_nits.is_some(),
             hdr_error,
-            hdr_restore_max_bpc,
+            hdr_restore,
             vblank_frame: None,
             vblank_frame_name,
             time_since_presentation_plot_name,
@@ -2735,7 +2742,7 @@ impl Tty {
                     ) {
                         Ok((white, previous_max_bpc)) => {
                             if !surface.hdr_enabled {
-                                surface.hdr_restore_max_bpc = previous_max_bpc;
+                                surface.hdr_restore = restore;
                             }
                             surface.hdr_enabled = true;
                             surface.hdr_error = None;
@@ -2750,7 +2757,7 @@ impl Tty {
                                 &device.drm,
                                 surface.connector,
                                 config.max_bpc,
-                                surface.hdr_restore_max_bpc.take(),
+                                std::mem::take(&mut surface.hdr_restore),
                             ) {
                                 warn!(
                                     "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
@@ -2767,7 +2774,7 @@ impl Tty {
                         &device.drm,
                         surface.connector,
                         config.max_bpc,
-                        surface.hdr_restore_max_bpc.take(),
+                        std::mem::take(&mut surface.hdr_restore),
                     ) {
                         warn!(
                             "output {:?}: failed to apply SDR connector properties: {err:?}",
