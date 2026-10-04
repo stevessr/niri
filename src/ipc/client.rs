@@ -850,8 +850,14 @@ fn print_output(output: Output) -> anyhow::Result<()> {
             println!("  DRM output color format selection: legacy/automatic");
         }
 
-        if let Some(max_bpc) = hdr.drm_max_bpc {
-            println!("  DRM maximum BPC capability: {max_bpc}");
+        match (hdr.drm_min_bpc, hdr.drm_max_bpc) {
+            (Some(min_bpc), Some(max_bpc)) => {
+                println!("  DRM BPC capability: {min_bpc}–{max_bpc}");
+            }
+            (_, Some(max_bpc)) => {
+                println!("  DRM maximum BPC capability: {max_bpc}");
+            }
+            _ => {}
         }
 
         match hdr.hdr10_signal_path() {
