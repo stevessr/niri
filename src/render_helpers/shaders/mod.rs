@@ -14,10 +14,17 @@ use super::renderer::NiriRenderer;
 use super::shader_element::ShaderProgram;
 use crate::render_helpers::blur::BlurProgram;
 
+/// Custom texture shader program for either renderer backend.
+#[derive(Debug, Clone)]
+pub enum NiriTexProgram {
+    Gles(GlesTexProgram),
+    Vulkan(VulkanPixelProgram),
+}
+
 pub struct Shaders {
     pub border: Option<ShaderProgram>,
     pub shadow: Option<ShaderProgram>,
-    pub clipped_surface: Option<GlesTexProgram>,
+    pub clipped_surface: Option<NiriTexProgram>,
     pub postprocess_and_clip: Option<GlesTexProgram>,
     pub resize: Option<ShaderProgram>,
     pub gradient_fade: Option<GlesTexProgram>,
@@ -106,7 +113,9 @@ impl Shaders {
             .map_err(|err| {
                 warn!("error compiling clipped surface shader: {err:?}");
             })
-            .ok();
+            .ok()
+            .map(NiriTexProgram::Gles);
+
 
         let postprocess_and_clip = renderer
             .compile_custom_texture_shader(
@@ -261,7 +270,8 @@ fn vulkanize_fragment(src: &str, decls: &[CustomUniformDecl], textures: &[&str])
              vec4 niri_pc0; vec4 niri_pc1; vec4 niri_pc2; vec4 niri_pc3; vec4 niri_pc4; vec4 niri_pc5;\n\
          };\n\
          #define niri_alpha niri_pc2.z\n\
-         #define niri_tint niri_pc2.w\n",
+         #define niri_tint niri_pc2.w\n\
+         #define v_coords niri_v_coords\n",
     );
 
     for line in src.lines() {
@@ -368,10 +378,32 @@ impl Shaders {
         .map_err(|err| warn!("error compiling Vulkan shadow shader: {err:?}"))
         .ok();
 
+        let clipped_surface = {
+            let src = concat!(
+                include_str!("clipped_surface.frag"),
+                include_str!("rounding_alpha.frag"),
+                "\nvec4 postprocess(vec4 color) { return color; }",
+            );
+            let uniforms = [
+                UniformName::new("niri_scale", UniformType::_1f),
+                UniformName::new("geo_size", UniformType::_2f),
+                UniformName::new("corner_radius", UniformType::_4f),
+                UniformName::new("input_to_geo", UniformType::Matrix3x3),
+                // Supplied by VulkanFrame::draw_texture_custom for texture overrides.
+                UniformName::new("alpha", UniformType::_1f),
+                UniformName::new("tint", UniformType::_1f),
+            ];
+
+            compile_vulkan_program(renderer, src, &uniforms, &["tex"])
+                .map_err(|err| warn!("error compiling Vulkan clipped surface shader: {err:?}"))
+                .ok()
+                .map(NiriTexProgram::Vulkan)
+        };
+
         Self {
             border,
             shadow,
-            clipped_surface: None,
+            clipped_surface,
             postprocess_and_clip: None,
             resize: None,
             gradient_fade: None,
@@ -578,6 +610,10 @@ mod tests {
         assert!(
             shaders.shadow.is_some(),
             "native Vulkan shadow shader failed to compile"
+        );
+        assert!(
+            shaders.clipped_surface.is_some(),
+            "native Vulkan clipped-surface shader failed to compile"
         );
     }
 }
