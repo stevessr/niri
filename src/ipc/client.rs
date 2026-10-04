@@ -7,9 +7,9 @@ use anyhow::{anyhow, bail, Context};
 use niri_config::OutputName;
 use niri_ipc::socket::Socket;
 use niri_ipc::{
-    Action, Cast, CastKind, CastTarget, Event, HdrSignalPath, KeyboardLayouts, LogicalOutput,
-    Mode, Output, OutputConfigChanged, Overview, Request, Response, Transform, Window,
-    WindowLayout,
+    Action, Cast, CastKind, CastTarget, Event, HdrSignalPath, IccProfileState,
+    KeyboardLayouts, LogicalOutput, Mode, Output, OutputConfigChanged, Overview, Request, Response,
+    Transform, Window, WindowLayout,
 };
 use serde_json::json;
 
@@ -600,6 +600,8 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         logical,
         max_bpc,
         icc_profile,
+        icc_profile_state,
+        icc_profile_error,
         hdr_capabilities,
         hdr_requested,
         hdr_sdr_white_nits,
@@ -693,6 +695,31 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
     if let Some(icc_profile) = icc_profile {
         println!("  ICC profile: {icc_profile}");
+        match icc_profile_state {
+            Some(IccProfileState::Applied) => {
+                println!("  ICC calibration: applied");
+            }
+            Some(IccProfileState::BypassedHdr) => {
+                println!("  ICC calibration: suspended while HDR is active");
+            }
+            Some(IccProfileState::OverriddenGammaControl) => {
+                println!("  ICC calibration: temporarily overridden by gamma-control");
+            }
+            Some(IccProfileState::Error) => {
+                if let Some(error) = icc_profile_error.as_deref() {
+                    println!("  ICC calibration: error ({error})");
+                } else {
+                    println!("  ICC calibration: error");
+                }
+            }
+            Some(IccProfileState::Disabled) | None => {
+                println!("  ICC calibration: not applied");
+            }
+        }
+    } else if let Some(IccProfileState::Error) = icc_profile_state {
+        if let Some(error) = icc_profile_error.as_deref() {
+            println!("  ICC calibration: error ({error})");
+        }
     }
 
     if hdr_enabled {
