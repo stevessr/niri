@@ -1288,6 +1288,9 @@ pub struct Output {
     /// Whether niri is currently compositing this output through the experimental HDR10 path.
     #[serde(default)]
     pub hdr_enabled: bool,
+    /// Last error that prevented a requested HDR mode from becoming active.
+    #[serde(default)]
+    pub hdr_error: Option<String>,
 }
 
 /// Runtime state of an output ICC calibration.
