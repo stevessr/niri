@@ -872,13 +872,13 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
         match hdr.hdr10_signal_path() {
             Some(HdrSignalPath::Rgb) => {
-                println!("  HDR10 signalling path: ready via BT.2020 RGB");
+                println!("  HDR10 signalling candidate: BT.2020 RGB");
             }
             Some(HdrSignalPath::Yuv444) => {
-                println!("  HDR10 signalling path: ready via BT.2020 YCbCr 4:4:4");
+                println!("  HDR10 signalling candidate: BT.2020 YCbCr 4:4:4");
             }
             None => {
-                println!("  HDR10 signalling path: unavailable");
+                println!("  HDR10 signalling candidate: unavailable");
             }
         }
     }
