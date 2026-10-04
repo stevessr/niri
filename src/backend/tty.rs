@@ -382,6 +382,10 @@ struct Surface {
     gamma_props: Option<GammaProps>,
     /// Gamma change to apply upon session resume.
     pending_gamma_change: Option<Option<Vec<u16>>>,
+    /// Runtime status of the configured ICC calibration.
+    icc_profile_state: niri_ipc::IccProfileState,
+    /// Last error while applying ICC calibration.
+    icc_profile_error: Option<String>,
     /// Whether this surface currently has HDR connector signalling enabled.
     hdr_enabled: bool,
     /// max-bpc value observed before niri first enabled HDR on this surface.
@@ -1691,6 +1695,8 @@ impl Tty {
             dmabuf_feedback,
             gamma_props,
             pending_gamma_change: None,
+            icc_profile_state: niri_ipc::IccProfileState::Disabled,
+            icc_profile_error: None,
             hdr_enabled: hdr_sdr_white_nits.is_some(),
             hdr_restore_max_bpc,
             vblank_frame: None,
@@ -2414,8 +2420,9 @@ impl Tty {
                     logical,
                     max_bpc,
                     icc_profile: None,
-                    icc_profile_state: Some(surface.icc_profile_state),
-                    icc_profile_error: surface.icc_profile_error.clone(),
+                    icc_profile_state: surface.map(|surface| surface.icc_profile_state),
+                    icc_profile_error: surface
+                        .and_then(|surface| surface.icc_profile_error.clone()),
                     hdr_capabilities: Some(hdr_capabilities),
                     hdr_requested: false,
                     hdr_sdr_white_nits: None,
