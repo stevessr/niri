@@ -859,9 +859,21 @@ impl Tty {
                     shaders::set_custom_open_program(gles_renderer, Some(src));
                 }
                 drop(config);
-            } else if let Some(vulkan_renderer) = renderer.as_vulkan_renderer() {
-                shaders::init_vulkan(vulkan_renderer);
-                info!("running on the native Vulkan renderer; border and shadow shaders enabled");
+            } else if renderer.as_vulkan_renderer().is_some() {
+                {
+                    let vulkan_renderer = renderer.as_vulkan_renderer().unwrap();
+                    shaders::init_vulkan(vulkan_renderer);
+                }
+
+                let config = self.config.borrow();
+                if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
+                    shaders::set_custom_open_program(&mut renderer, Some(src));
+                }
+                drop(config);
+
+                info!(
+                    "running on the native Vulkan renderer; border, shadow, rounded clipping,                      offscreen fades and window-open shaders enabled"
+                );
             }
 
             niri.update_shaders();
