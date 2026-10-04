@@ -2208,13 +2208,17 @@ impl State {
             ipc_output.logical = logical;
 
             let name = OutputName::from_ipc_output(ipc_output);
-            ipc_output.icc_profile = self
-                .niri
-                .config
-                .borrow()
-                .outputs
-                .find(&name)
+            let output_config = self.niri.config.borrow().outputs.find(&name).cloned();
+            ipc_output.icc_profile = output_config
+                .as_ref()
                 .and_then(|config| config.icc_profile.clone());
+            ipc_output.hdr_requested = output_config
+                .as_ref()
+                .is_some_and(|config| config.hdr.is_some());
+            ipc_output.hdr_sdr_white_nits = output_config
+                .as_ref()
+                .and_then(|config| config.hdr.as_ref())
+                .map(|hdr| hdr.sdr_white_nits());
         }
 
         #[cfg(feature = "dbus")]
