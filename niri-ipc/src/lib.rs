@@ -1362,6 +1362,9 @@ pub struct HdrCapabilities {
     /// Whether the connector can explicitly request YCbCr 4:2:0 output.
     #[serde(default)]
     pub drm_yuv420: bool,
+    /// Minimum BPC accepted by the DRM connector property, when exposed.
+    #[serde(default)]
+    pub drm_min_bpc: Option<u8>,
     /// Maximum BPC accepted by the DRM connector property, when exposed.
     pub drm_max_bpc: Option<u8>,
 }
@@ -1386,7 +1389,7 @@ impl HdrCapabilities {
             || !self.pq
             || !self.static_metadata_type1
             || !self.drm_hdr_metadata
-            || !self.drm_max_bpc.is_some_and(|max_bpc| max_bpc >= 10)
+            || self.hdr_bpc().is_none()
         {
             return None;
         }
@@ -1408,6 +1411,18 @@ impl HdrCapabilities {
         }
 
         None
+    }
+
+    pub fn hdr_bpc(&self) -> Option<MaxBpc> {
+        let min = self.drm_min_bpc?;
+        let max = self.drm_max_bpc?;
+
+        [MaxBpc::_10, MaxBpc::_12, MaxBpc::_14, MaxBpc::_16]
+            .into_iter()
+            .find(|bpc| {
+                let value = *bpc as u8;
+                (min..=max).contains(&value)
+            })
     }
 
     pub fn hdr10_ready(&self) -> bool {
