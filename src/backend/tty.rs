@@ -67,6 +67,7 @@ use crate::color_management::{load_vcgt, parse_edid_hdr_capabilities};
 use crate::frame_clock::FrameClock;
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
+use crate::render_helpers::offscreen::OffscreenBuffer;
 use crate::render_helpers::renderer::AsGlesRenderer;
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
 use crate::utils::{
@@ -401,6 +402,8 @@ struct Surface {
     hdr_error: Option<String>,
     /// Connector properties observed before niri first enabled HDR on this surface.
     hdr_restore: HdrConnectorRestore,
+    /// Persistent RGBA16F working framebuffer used while HDR composition is active.
+    hdr_scene: OffscreenBuffer,
     /// Tracy frame that goes from vblank to vblank.
     vblank_frame: Option<tracy_client::Frame>,
     /// Frame name for the VBlank frame.
@@ -1712,6 +1715,7 @@ impl Tty {
             hdr_signal_path,
             hdr_error,
             hdr_restore,
+            hdr_scene: OffscreenBuffer::default(),
             vblank_frame: None,
             vblank_frame_name,
             time_since_presentation_plot_name,
