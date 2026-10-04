@@ -2495,6 +2495,7 @@ impl Tty {
                         })
                         .and_then(|output| niri.output_state.get(output))
                         .is_some_and(|state| state.color_transform_active),
+                    hdr_error: surface.and_then(|surface| surface.hdr_error.clone()),
                 };
 
                 ipc_outputs.insert(id, ipc_output);
