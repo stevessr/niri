@@ -766,6 +766,7 @@ impl Tty {
                             })
                             .cloned();
 
+                        let was_hdr_enabled = surface.hdr_enabled;
                         let hdr_sdr_white_nits = if let Some(hdr) = config.hdr.as_ref() {
                             match enable_hdr10_connector(
                                 &device.drm,
@@ -788,16 +789,18 @@ impl Tty {
                                         "output {:?}: cannot restore experimental HDR10 after resume: {err:?}; keeping SDR",
                                         surface.name.connector
                                     );
-                                    if let Err(reset_err) = disable_hdr_connector(
-                                        &device.drm,
-                                        surface.connector,
-                                        config.max_bpc,
-                                        std::mem::take(&mut surface.hdr_restore),
-                                    ) {
-                                        warn!(
-                                            "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
-                                            surface.name.connector
-                                        );
+                                    if was_hdr_enabled {
+                                        if let Err(reset_err) = disable_hdr_connector(
+                                            &device.drm,
+                                            surface.connector,
+                                            config.max_bpc,
+                                            std::mem::take(&mut surface.hdr_restore),
+                                        ) {
+                                            warn!(
+                                                "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
+                                                surface.name.connector
+                                            );
+                                        }
                                     }
                                     surface.hdr_enabled = false;
                                     surface.hdr_signal_path = None;
@@ -1678,16 +1681,6 @@ impl Tty {
                         warn!(
                             "output {connector_name:?}: cannot enable experimental HDR10: {err:?}; keeping SDR"
                         );
-                        if let Err(reset_err) = disable_hdr_connector(
-                            &device.drm,
-                            connector.handle(),
-                            config.max_bpc,
-                            HdrConnectorRestore::default(),
-                        ) {
-                            warn!(
-                                "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
-                            );
-                        }
                         (None, None, HdrConnectorRestore::default(), Some(error))
                     }
                 }
@@ -2739,6 +2732,7 @@ impl Tty {
                     continue;
                 };
 
+                let was_hdr_enabled = surface.hdr_enabled;
                 let hdr_sdr_white_nits = if let Some(hdr) = config.hdr.as_ref() {
                     match enable_hdr10_connector(
                         &device.drm,
@@ -2761,16 +2755,18 @@ impl Tty {
                                 "output {:?}: cannot enable experimental HDR10: {err:?}; keeping SDR",
                                 surface.name.connector
                             );
-                            if let Err(reset_err) = disable_hdr_connector(
-                                &device.drm,
-                                surface.connector,
-                                config.max_bpc,
-                                std::mem::take(&mut surface.hdr_restore),
-                            ) {
-                                warn!(
-                                    "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
-                                    surface.name.connector
-                                );
+                            if was_hdr_enabled {
+                                if let Err(reset_err) = disable_hdr_connector(
+                                    &device.drm,
+                                    surface.connector,
+                                    config.max_bpc,
+                                    std::mem::take(&mut surface.hdr_restore),
+                                ) {
+                                    warn!(
+                                        "output {:?}: failed to restore SDR connector properties: {reset_err:?}",
+                                        surface.name.connector
+                                    );
+                                }
                             }
                             surface.hdr_enabled = false;
                             surface.hdr_signal_path = None;
