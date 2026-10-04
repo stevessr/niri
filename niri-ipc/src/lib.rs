@@ -1288,6 +1288,9 @@ pub struct Output {
     /// Whether niri is currently compositing this output through the experimental HDR10 path.
     #[serde(default)]
     pub hdr_enabled: bool,
+    /// HDR10 wire signalling path currently programmed on the connector.
+    #[serde(default)]
+    pub hdr_signal_path: Option<HdrSignalPath>,
     /// Last error that prevented a requested HDR mode from becoming active.
     #[serde(default)]
     pub hdr_error: Option<String>,
