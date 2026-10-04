@@ -2062,6 +2062,62 @@ impl Tty {
             return rv;
         }
 
+        // HDR composition uses a floating-point working framebuffer on the primary render GPU.
+        // This keeps extended sRGB values (including >1.0 highlights and negative wide-gamut
+        // components) alive until the final Rec.2020/PQ conversion into the DRM 10-bit swapchain.
+        let hdr_scene = if let Some(sdr_white_nits) = niri.output_hdr_sdr_white_nits(output) {
+            let mut scene_renderer =
+                match self.gpu_manager.single_renderer(&self.primary_render_node) {
+                    Ok(renderer) => renderer,
+                    Err(err) => {
+                        warn!("error creating primary renderer for HDR scene: {err:?}");
+                        return rv;
+                    }
+                };
+
+            let ctx = RenderCtx {
+                renderer: &mut scene_renderer,
+                target: RenderTarget::Output,
+                xray: None,
+            };
+            let mut scene_elements =
+                niri.render_to_vec_without_output_transform(ctx, output, true);
+
+            if niri.debug_draw_damage {
+                let output_state = niri.output_state.get_mut(output).unwrap();
+                draw_damage(
+                    &mut output_state.debug_damage_tracker,
+                    &mut scene_elements,
+                );
+            }
+
+            let scale = Scale::from(output.current_scale().fractional_scale());
+            let rendered = surface.hdr_scene.render_with_format(
+                &mut scene_renderer,
+                scale,
+                Fourcc::Abgr16161616f,
+                &scene_elements,
+            );
+
+            match rendered {
+                Ok((element, sync, data)) => Some((
+                    element
+                        .with_output_hdr(sdr_white_nits)
+                        .with_sync(sync),
+                    data.states,
+                )),
+                Err(err) => {
+                    warn!(
+                        "output {:?}: error rendering HDR floating-point scene: {err:?}",
+                        surface.name.connector
+                    );
+                    return rv;
+                }
+            }
+        } else {
+            None
+        };
+
         let mut renderer = match self.gpu_manager.renderer(
             &self.primary_render_node,
             &device.render_node.unwrap_or(self.primary_render_node),
@@ -2074,19 +2130,24 @@ impl Tty {
             }
         };
 
-        // Render the elements.
-        let ctx = RenderCtx {
-            renderer: &mut renderer,
-            target: RenderTarget::Output,
-            xray: None,
-        };
-        let mut elements = niri.render_to_vec(ctx, output, true);
+        let (mut elements, hdr_scene_states) =
+            if let Some((element, states)) = hdr_scene {
+                (vec![element.into()], Some(states))
+            } else {
+                let ctx = RenderCtx {
+                    renderer: &mut renderer,
+                    target: RenderTarget::Output,
+                    xray: None,
+                };
+                let mut elements = niri.render_to_vec(ctx, output, true);
 
-        // Visualize the damage, if enabled.
-        if niri.debug_draw_damage {
-            let output_state = niri.output_state.get_mut(output).unwrap();
-            draw_damage(&mut output_state.debug_damage_tracker, &mut elements);
-        }
+                if niri.debug_draw_damage {
+                    let output_state = niri.output_state.get_mut(output).unwrap();
+                    draw_damage(&mut output_state.debug_damage_tracker, &mut elements);
+                }
+
+                (elements, None)
+            };
 
         // Overlay planes are disabled by default as they cause weird performance issues on my
         // system.
@@ -2145,14 +2206,16 @@ impl Tty {
                     }
                 }
 
-                niri.update_primary_scanout_output(output, &res.states);
+                let element_states = hdr_scene_states.as_ref().unwrap_or(&res.states);
+
+                niri.update_primary_scanout_output(output, element_states);
                 if let Some(dmabuf_feedback) = surface.dmabuf_feedback.as_ref() {
-                    niri.send_dmabuf_feedbacks(output, dmabuf_feedback, &res.states);
+                    niri.send_dmabuf_feedbacks(output, dmabuf_feedback, element_states);
                 }
 
                 if !res.is_empty {
                     let presentation_feedbacks =
-                        niri.take_presentation_feedbacks(output, &res.states);
+                        niri.take_presentation_feedbacks(output, element_states);
                     let data = (presentation_feedbacks, target_presentation_time);
 
                     match drm_compositor.queue_frame(data) {
