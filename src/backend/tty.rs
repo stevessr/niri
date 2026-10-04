@@ -395,6 +395,8 @@ struct Surface {
     icc_profile_error: Option<String>,
     /// Whether this surface currently has HDR connector signalling enabled.
     hdr_enabled: bool,
+    /// HDR10 wire signalling path currently programmed on this connector.
+    hdr_signal_path: Option<niri_ipc::HdrSignalPath>,
     /// Last error that prevented requested HDR from becoming active.
     hdr_error: Option<String>,
     /// Connector properties observed before niri first enabled HDR on this surface.
@@ -772,11 +774,12 @@ impl Tty {
                                 config.max_bpc,
                                 hdr,
                             ) {
-                                Ok((white, restore)) => {
+                                Ok((white, signal_path, restore)) => {
                                     if !surface.hdr_enabled {
                                         surface.hdr_restore = restore;
                                     }
                                     surface.hdr_enabled = true;
+                                    surface.hdr_signal_path = Some(signal_path);
                                     surface.hdr_error = None;
                                     Some(white)
                                 }
@@ -797,6 +800,7 @@ impl Tty {
                                         );
                                     }
                                     surface.hdr_enabled = false;
+                                    surface.hdr_signal_path = None;
                                     surface.hdr_error = Some(format!("{err:#}"));
                                     None
                                 }
@@ -814,6 +818,7 @@ impl Tty {
                                 );
                             }
                             surface.hdr_enabled = false;
+                            surface.hdr_signal_path = None;
                             surface.hdr_error = None;
                             None
                         };
@@ -1653,7 +1658,7 @@ impl Tty {
 
         let vrr_enabled = compositor.vrr_enabled();
 
-        let (hdr_sdr_white_nits, hdr_restore, hdr_error) =
+        let (hdr_sdr_white_nits, hdr_signal_path, hdr_restore, hdr_error) =
             if let Some(hdr) = config.hdr.as_ref() {
                 match enable_hdr10_connector(
                     &device.drm,
@@ -1662,11 +1667,11 @@ impl Tty {
                     config.max_bpc,
                     hdr,
                 ) {
-                    Ok((white, restore)) => {
+                    Ok((white, signal_path, restore)) => {
                         info!(
                             "output {connector_name:?}: enabling experimental HDR10 output, SDR white {white:.1} nits"
                         );
-                        (Some(white), restore, None)
+                        (Some(white), Some(signal_path), restore, None)
                     }
                     Err(err) => {
                         let error = format!("{err:#}");
@@ -1683,11 +1688,11 @@ impl Tty {
                                 "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
                             );
                         }
-                        (None, HdrConnectorRestore::default(), Some(error))
+                        (None, None, HdrConnectorRestore::default(), Some(error))
                     }
                 }
             } else {
-                (None, HdrConnectorRestore::default(), None)
+                (None, None, HdrConnectorRestore::default(), None)
             };
 
         let vblank_frame_name =
@@ -1711,6 +1716,7 @@ impl Tty {
             icc_profile_state: niri_ipc::IccProfileState::Disabled,
             icc_profile_error: None,
             hdr_enabled: hdr_sdr_white_nits.is_some(),
+            hdr_signal_path,
             hdr_error,
             hdr_restore,
             vblank_frame: None,
@@ -2502,6 +2508,7 @@ impl Tty {
                         })
                         .and_then(|output| niri.output_state.get(output))
                         .is_some_and(|state| state.color_transform_active),
+                    hdr_signal_path: surface.and_then(|surface| surface.hdr_signal_path),
                     hdr_error: surface.and_then(|surface| surface.hdr_error.clone()),
                 };
 
@@ -2740,11 +2747,12 @@ impl Tty {
                         config.max_bpc,
                         hdr,
                     ) {
-                        Ok((white, restore)) => {
+                        Ok((white, signal_path, restore)) => {
                             if !surface.hdr_enabled {
                                 surface.hdr_restore = restore;
                             }
                             surface.hdr_enabled = true;
+                            surface.hdr_signal_path = Some(signal_path);
                             surface.hdr_error = None;
                             Some(white)
                         }
@@ -2765,6 +2773,7 @@ impl Tty {
                                 );
                             }
                             surface.hdr_enabled = false;
+                            surface.hdr_signal_path = None;
                             surface.hdr_error = Some(format!("{err:#}"));
                             None
                         }
@@ -2782,6 +2791,7 @@ impl Tty {
                         );
                     }
                     surface.hdr_enabled = false;
+                    surface.hdr_signal_path = None;
                     surface.hdr_error = None;
                     None
                 };
@@ -4120,7 +4130,7 @@ fn enable_hdr10_connector(
     format: Fourcc,
     configured_max_bpc: Option<MaxBpc>,
     hdr: &niri_config::output::Hdr,
-) -> anyhow::Result<(f32, HdrConnectorRestore)> {
+) -> anyhow::Result<(f32, niri_ipc::HdrSignalPath, HdrConnectorRestore)> {
     ensure!(
         matches!(format, Fourcc::Abgr2101010 | Fourcc::Xbgr2101010),
         "DRM compositor selected {format:?}, but HDR requires a 10-bit BGR2101010 swapchain"
@@ -4153,7 +4163,7 @@ fn enable_hdr10_connector(
     props.set_hdr10(sdr_white_nits, signal_path)?;
     props.commit()?;
 
-    Ok((sdr_white_nits, restore))
+    Ok((sdr_white_nits, signal_path, restore))
 }
 
 fn disable_hdr_connector(
