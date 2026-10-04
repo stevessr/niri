@@ -68,7 +68,7 @@ use crate::backend::OutputId;
 use crate::frame_clock::FrameClock;
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
-use crate::render_helpers::renderer::AsGlesRenderer;
+use crate::render_helpers::renderer::{AsGlesRenderer, AsVulkanRenderer};
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
 use crate::utils::{get_monotonic_time, is_laptop_panel, logical_output, PanelOrientation};
 
@@ -859,8 +859,9 @@ impl Tty {
                     shaders::set_custom_open_program(gles_renderer, Some(src));
                 }
                 drop(config);
-            } else {
-                warn!("running on the native Vulkan renderer; GLES-only effects are disabled");
+            } else if let Some(vulkan_renderer) = renderer.as_vulkan_renderer() {
+                shaders::init_vulkan(vulkan_renderer);
+                info!("running on the native Vulkan renderer; border and shadow shaders enabled");
             }
 
             niri.update_shaders();
