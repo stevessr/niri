@@ -107,6 +107,8 @@ impl Winit {
                 logical: Some(logical_output(&output)),
                 max_bpc: None,
                 icc_profile: None,
+                icc_profile_state: None,
+                icc_profile_error: None,
                 hdr_capabilities: None,
                 hdr_requested: false,
                 hdr_sdr_white_nits: None,
