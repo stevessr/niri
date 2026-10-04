@@ -359,7 +359,9 @@ The reported information includes:
 - whether the DRM connector exposes `HDR_OUTPUT_METADATA`, `Colorspace`, and the modern
   `color format` selector (RGB / YUV 4:4:4 / 4:2:2 / 4:2:0).
 
-These fields are also present in the JSON IPC output as `hdr_capabilities`.
+These fields are also present in the JSON IPC output as `hdr_capabilities`. The DRM
+`color format` values are capability candidates rather than a guarantee for every
+mode/bit-depth combination; activation still has to pass the driver's atomic commit.
 
 ### Experimental HDR10 output
 
