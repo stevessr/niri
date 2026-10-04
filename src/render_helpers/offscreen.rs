@@ -62,6 +62,7 @@ pub struct OffscreenRenderElement {
     alpha: f32,
     kind: Kind,
     program: OffscreenProgram,
+    sync: Option<SyncPoint>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -224,6 +225,7 @@ impl OffscreenBuffer {
             alpha: 1.,
             kind: Kind::Unspecified,
             program: OffscreenProgram::Standard,
+            sync: None,
         };
 
         let data = OffscreenData {
@@ -260,6 +262,11 @@ impl OffscreenRenderElement {
 
     pub fn with_output_hdr(mut self, sdr_white_nits: f32) -> Self {
         self.program = OffscreenProgram::OutputHdr { sdr_white_nits };
+        self
+    }
+
+    pub fn with_sync(mut self, sync: SyncPoint) -> Self {
+        self.sync = Some(sync);
         self
     }
 
@@ -351,6 +358,10 @@ impl RenderElement<GlesRenderer> for OffscreenRenderElement {
         if frame.context_id() != self.renderer_context_id {
             warn!("trying to render texture from different renderer");
             return Ok(());
+        }
+
+        if let Some(sync) = self.sync.as_ref() {
+            frame.wait(sync)?;
         }
 
         let shaders = Shaders::get_from_frame(frame);
