@@ -368,10 +368,8 @@ impl ImageCopyCaptureHandler for State {
         };
 
         // A session may only have one frame object in flight at a time, a
-        // second one is a duplicate_frame protocol error. Smithay doesn't check
-        // itself it (create_frame pushes onto active_frames unconditionally)
-        // and doesn't expose the session object for us to post_error() on, so
-        // fail the frame rather than leak it.
+        // second one is a duplicate_frame protocol error, which Smithay posts
+        // itself now, so this is defensive only.
         if s.pending_frame.is_some() {
             warn!("client created a second frame while one was still in flight"); // client bug
             frame.fail(CaptureFailureReason::Unknown);
