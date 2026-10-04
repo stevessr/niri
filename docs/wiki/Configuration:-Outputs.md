@@ -320,9 +320,8 @@ supported, and the curves are resampled to the LUT size exposed by the DRM drive
 
 This is **display calibration**, not full ICC color conversion. The profile's characterization
 data is not yet used to transform application content between color spaces, and this option does
-not enable HDR output. Until niri has a complete HDR/color-management rendering path, HDR
-connector metadata is reset to SDR defaults to avoid displaying ordinary SDR content with stale
-HDR state left by another compositor.
+not enable HDR by itself. When the experimental HDR10 path is active, niri suspends the hardware
+`vcgt` calibration because a downstream gamma LUT would corrupt the PQ transfer function.
 
 The calibration is reapplied after output configuration changes, reconnects and session resume.
 A Wayland gamma-control client may temporarily override it; when the client releases the output,
@@ -351,7 +350,8 @@ The reported information includes:
 - PQ (SMPTE ST 2084), HLG and traditional HDR EOTF support;
 - BT.2020 RGB, YCC and constant-luminance YCC signalling support;
 - Static Metadata Type 1 support and advertised min/max/frame-average luminance;
-- whether the DRM connector exposes `HDR_OUTPUT_METADATA` and `Colorspace`.
+- whether the DRM connector exposes `HDR_OUTPUT_METADATA`, `Colorspace`, and the modern
+  `color format` selector (RGB / YUV 4:4:4 / 4:2:2 / 4:2:0).
 
 These fields are also present in the JSON IPC output as `hdr_capabilities`.
 
@@ -367,9 +367,11 @@ output "DP-1" {
 
 The `hdr` node is fail-closed. Niri enables it only when all of the following are true:
 
-- the EDID advertises PQ, Static Metadata Type 1, BT.2020 RGB **and** YCC (the driver may choose
-  either connector encoding unless a color format is forced);
-- DRM exposes `HDR_OUTPUT_METADATA` and a BT.2020 RGB/YCC `Colorspace` value;
+- the EDID advertises PQ and Static Metadata Type 1;
+- there is at least one complete BT.2020 signal path shared by the sink and DRM: niri prefers
+  BT.2020 RGB, and may use BT.2020 YCC only when DRM exposes the modern `color format` property
+  and can explicitly select YUV 4:4:4;
+- DRM exposes `HDR_OUTPUT_METADATA` and the matching BT.2020 `Colorspace` value;
 - the connector's `max bpc` property supports at least 10 bpc;
 - the DRM compositor actually selected the 10-bit `ABGR2101010` swapchain format.
 
@@ -395,8 +397,13 @@ niri msg output DP-1 hdr on --sdr-white-nits 203
 niri msg output DP-1 hdr off
 ```
 
-Use `niri msg outputs` to inspect `HDR output`, sink capabilities, DRM BT.2020 signalling and
-the connector's maximum BPC before enabling it.
+Use `niri msg outputs` to inspect whether HDR was requested versus actually enabled, the chosen
+HDR10 signalling path, sink capabilities, DRM BT.2020/color-format support and the connector's
+maximum BPC before enabling it.
+
+On kernels/drivers without the `color format` property, niri intentionally treats the link as
+RGB-only for HDR. This matches the legacy HDMI default while avoiding a YCC Colorspace value that
+does not necessarily match the actual wire encoding.
 
 ### `hot-corners`
 
