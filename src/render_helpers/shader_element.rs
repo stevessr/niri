@@ -597,6 +597,17 @@ impl ShaderRenderElement {
     }
 }
 
+pub(super) fn uniform_to_custom_owned(
+    uniform: &Uniform<'_>,
+) -> Option<smithay::backend::renderer::vulkan::OwnedCustomUniform> {
+    uniform_to_custom(uniform).map(|uniform| {
+        smithay::backend::renderer::vulkan::OwnedCustomUniform {
+            name: uniform.name.to_owned(),
+            value: uniform.value,
+        }
+    })
+}
+
 fn uniform_to_custom<'a>(
     uniform: &'a Uniform<'_>,
 ) -> Option<smithay::backend::renderer::vulkan::CustomUniform<'a>> {
