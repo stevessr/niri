@@ -1383,10 +1383,12 @@ pub enum HdrSignalPath {
 }
 
 impl HdrCapabilities {
-    /// Return the safest HDR10 signalling path that can be explicitly represented.
+    /// Return the safest HDR10 signalling path candidate advertised by the sink and DRM.
     ///
-    /// A usable path requires the modern DRM `color format` property so niri can lock the
-    /// actual wire encoding to the same RGB/YUV family as the BT.2020 Colorspace value.
+    /// A candidate requires the modern DRM `color format` property so niri can lock the actual
+    /// wire encoding to the same RGB/YUV family as the BT.2020 Colorspace value. The property
+    /// values are capability hints: the final mode/bit-depth combination is validated by the DRM
+    /// atomic commit when HDR is activated.
     pub fn hdr10_signal_path(&self) -> Option<HdrSignalPath> {
         if !self.edid_available
             || !self.pq
@@ -1428,9 +1430,6 @@ impl HdrCapabilities {
             })
     }
 
-    pub fn hdr10_ready(&self) -> bool {
-        self.hdr10_signal_path().is_some()
-    }
 }
 
 /// Output mode.
