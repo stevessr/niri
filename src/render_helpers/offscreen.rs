@@ -7,7 +7,9 @@ use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement
 use smithay::backend::renderer::element::{
     Element, Id, Kind, RenderElement, RenderElementStates, UnderlyingStorage,
 };
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{
+    GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform,
+};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::{
     CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
@@ -19,7 +21,8 @@ use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use super::encompassing_geo;
-use super::renderer::AsGlesFrame as _;
+use super::renderer::{AsGlesFrame as _, AsGlesRenderer as _};
+use super::shaders::Shaders;
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
 /// Buffer for offscreen rendering.
@@ -58,6 +61,13 @@ pub struct OffscreenRenderElement {
     src_size: Size<i32, Buffer>,
     alpha: f32,
     kind: Kind,
+    program: OffscreenProgram,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OffscreenProgram {
+    Standard,
+    OutputHdr { sdr_white_nits: f32 },
 }
 
 #[derive(Debug)]
@@ -75,7 +85,25 @@ impl OffscreenBuffer {
         scale: Scale<f64>,
         elements: &[impl RenderElement<GlesRenderer>],
     ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)> {
-        let _span = tracy_client::span!("OffscreenBuffer::render");
+        self.render_with_format(renderer, scale, Fourcc::Abgr8888, elements)
+    }
+
+    /// Render a scene into a persistent offscreen texture with an explicit pixel format.
+    ///
+    /// HDR output uses RGBA16F here so extended sRGB values above 1.0 and negative wide-gamut
+    /// components survive composition until the final output transfer function is applied.
+    pub fn render_with_format<R, E>(
+        &self,
+        renderer: &mut R,
+        scale: Scale<f64>,
+        format: Fourcc,
+        elements: &[E],
+    ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)>
+    where
+        R: Renderer + Bind<GlesTexture> + Offscreen<GlesTexture> + super::renderer::AsGlesRenderer,
+        E: RenderElement<R>,
+    {
+        let _span = tracy_client::span!("OffscreenBuffer::render_with_format");
 
         let geo = encompassing_geo(scale, elements.iter());
         let elements = Vec::from_iter(elements.iter().map(|ele| {
@@ -111,11 +139,15 @@ impl OffscreenBuffer {
                 reason = &size_string;
 
                 *inner = None;
+            } else if texture.format() != Some(format) {
+                reason = "pixel format changed";
+
+                *inner = None;
             } else if !texture.is_unique_reference() {
                 reason = "not unique";
 
                 *inner = None;
-            } else if *renderer_context_id != renderer.context_id() {
+            } else if *renderer_context_id != renderer.as_gles_renderer().context_id() {
                 reason = "renderer id changed";
 
                 *inner = None;
@@ -132,15 +164,16 @@ impl OffscreenBuffer {
             span.emit_text(reason);
 
             let texture: GlesTexture = renderer
-                .create_buffer(Fourcc::Abgr8888, src_size)
+                .create_buffer(format, src_size)
                 .context("error creating texture")?;
+            let renderer_context_id = renderer.as_gles_renderer().context_id();
 
             let buffer_size = src_size.to_logical(1, Transform::Normal).to_physical(1);
             let damage = OutputDamageTracker::new(buffer_size, scale, Transform::Normal);
 
             inner.insert(Inner {
                 texture,
-                renderer_context_id: renderer.context_id(),
+                renderer_context_id,
                 scale,
                 damage,
                 outer_damage: DamageBag::default(),
@@ -190,6 +223,7 @@ impl OffscreenBuffer {
             src_size,
             alpha: 1.,
             kind: Kind::Unspecified,
+            program: OffscreenProgram::Standard,
         };
 
         let data = OffscreenData {
@@ -221,6 +255,11 @@ impl OffscreenRenderElement {
 
     pub fn with_alpha(mut self, alpha: f32) -> Self {
         self.alpha = alpha;
+        self
+    }
+
+    pub fn with_output_hdr(mut self, sdr_white_nits: f32) -> Self {
+        self.program = OffscreenProgram::OutputHdr { sdr_white_nits };
         self
     }
 
@@ -314,6 +353,19 @@ impl RenderElement<GlesRenderer> for OffscreenRenderElement {
             return Ok(());
         }
 
+        let shaders = Shaders::get_from_frame(frame);
+        let program = match self.program {
+            OffscreenProgram::Standard => None,
+            OffscreenProgram::OutputHdr { .. } => shaders.output_hdr.clone(),
+        };
+        let hdr_uniforms = match self.program {
+            OffscreenProgram::Standard => None,
+            OffscreenProgram::OutputHdr { sdr_white_nits } => {
+                Some([Uniform::new("sdr_white_nits", sdr_white_nits)])
+            }
+        };
+        let uniforms = hdr_uniforms.as_ref().map_or(&[][..], |uniforms| &uniforms[..]);
+
         frame.render_texture_from_to(
             &self.texture,
             src,
@@ -322,8 +374,8 @@ impl RenderElement<GlesRenderer> for OffscreenRenderElement {
             opaque_regions,
             Transform::Normal,
             self.alpha,
-            None,
-            &[],
+            program.as_ref(),
+            uniforms,
         )
     }
 
