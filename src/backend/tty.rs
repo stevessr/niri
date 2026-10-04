@@ -2740,7 +2740,7 @@ impl Tty {
                         config.max_bpc,
                         hdr,
                     ) {
-                        Ok((white, previous_max_bpc)) => {
+                        Ok((white, restore)) => {
                             if !surface.hdr_enabled {
                                 surface.hdr_restore = restore;
                             }
@@ -3875,7 +3875,19 @@ impl<'a> ConnectorProperties<'a> {
         }
     }
 
+    fn hdr_restore_state(&self) -> HdrConnectorRestore {
+        HdrConnectorRestore {
+            max_bpc: self.max_bpc_value().ok(),
+            colorspace: self.find(c"Colorspace").ok().map(|(_, value)| *value),
+            color_format: self.find(c"color format").ok().map(|(_, value)| *value),
+        }
+    }
+
     fn reset_hdr(&mut self) -> anyhow::Result<()> {
+        self.restore_hdr(HdrConnectorRestore::default())
+    }
+
+    fn restore_hdr(&mut self, restore: HdrConnectorRestore) -> anyhow::Result<()> {
         const DRM_MODE_COLORIMETRY_DEFAULT: u64 = 0;
 
         if let Ok((info, value)) = self.find(c"HDR_OUTPUT_METADATA") {
@@ -3893,33 +3905,35 @@ impl<'a> ConnectorProperties<'a> {
             let property::ValueType::Enum(_) = info.value_type() else {
                 bail!("Colorspace has wrong property type")
             };
-            if *value != DRM_MODE_COLORIMETRY_DEFAULT {
-                self.requests.add_raw_property(
-                    self.connector.into(),
-                    info.handle(),
-                    DRM_MODE_COLORIMETRY_DEFAULT,
-                );
+            let target = restore.colorspace.unwrap_or(DRM_MODE_COLORIMETRY_DEFAULT);
+            if *value != target {
+                self.requests
+                    .add_raw_property(self.connector.into(), info.handle(), target);
                 self.has_change = true;
             }
         }
 
-        // Linux 2026 added a generic connector "color format" property. If present, restore it
-        // to AUTO together with the HDR colorspace so SDR mode does not inherit a forced RGB/YUV
-        // transport choice.
         if let Ok((info, value)) = self.find(c"color format") {
-            if let property::ValueType::Enum(values) = info.value_type() {
-                if let Some(auto) = values
+            let property::ValueType::Enum(values) = info.value_type() else {
+                bail!("color format has wrong property type")
+            };
+
+            let target = if let Some(target) = restore.color_format {
+                Some(target)
+            } else {
+                values
                     .values()
                     .1
                     .iter()
                     .find(|value| value.name() == c"AUTO")
                     .map(|value| value.value())
-                {
-                    if *value != auto {
-                        self.requests
-                            .add_raw_property(self.connector.into(), info.handle(), auto);
-                        self.has_change = true;
-                    }
+            };
+
+            if let Some(target) = target {
+                if *value != target {
+                    self.requests
+                        .add_raw_property(self.connector.into(), info.handle(), target);
+                    self.has_change = true;
                 }
             }
         }
@@ -4106,7 +4120,7 @@ fn enable_hdr10_connector(
     format: Fourcc,
     configured_max_bpc: Option<MaxBpc>,
     hdr: &niri_config::output::Hdr,
-) -> anyhow::Result<(f32, Option<u64>)> {
+) -> anyhow::Result<(f32, HdrConnectorRestore)> {
     ensure!(
         matches!(format, Fourcc::Abgr2101010 | Fourcc::Xbgr2101010),
         "DRM compositor selected {format:?}, but HDR requires a 10-bit BGR2101010 swapchain"
@@ -4133,28 +4147,28 @@ fn enable_hdr10_connector(
     });
 
     let mut props = ConnectorProperties::try_new(device, connector)?;
-    let previous_max_bpc = props.max_bpc_value().ok();
+    let restore = props.hdr_restore_state();
     props.set_max_bpc(max_bpc)?;
     let sdr_white_nits = hdr.sdr_white_nits();
     props.set_hdr10(sdr_white_nits, signal_path)?;
     props.commit()?;
 
-    Ok((sdr_white_nits, previous_max_bpc))
+    Ok((sdr_white_nits, restore))
 }
 
 fn disable_hdr_connector(
     device: &DrmDevice,
     connector: connector::Handle,
     configured_max_bpc: Option<MaxBpc>,
-    restore_max_bpc: Option<u64>,
+    restore: HdrConnectorRestore,
 ) -> anyhow::Result<()> {
     let mut props = ConnectorProperties::try_new(device, connector)?;
     if let Some(max_bpc) = configured_max_bpc {
         props.set_max_bpc(max_bpc)?;
-    } else if let Some(max_bpc) = restore_max_bpc {
+    } else if let Some(max_bpc) = restore.max_bpc {
         props.set_max_bpc_value(max_bpc)?;
     }
-    props.reset_hdr()?;
+    props.restore_hdr(restore)?;
     props.commit()
 }
 
