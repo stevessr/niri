@@ -113,6 +113,8 @@ impl Headless {
                 max_bpc: None,
                 icc_profile: None,
                 hdr_capabilities: None,
+                hdr_requested: false,
+                hdr_sdr_white_nits: None,
                 hdr_enabled: false,
             },
         );
