@@ -28,6 +28,14 @@ fn parse_vcgt(data: &[u8], output_entries: usize) -> anyhow::Result<Vec<u16>> {
         "ICC profile is too short"
     );
     ensure!(&data[36..40] == b"acsp", "missing ICC profile signature");
+    ensure!(
+        &data[12..16] == b"mntr",
+        "ICC profile is not a display/monitor profile"
+    );
+    ensure!(
+        &data[16..20] == b"RGB ",
+        "ICC display profile does not use the RGB device color space"
+    );
 
     let declared_size = be_u32(data, 0)? as usize;
     ensure!(
@@ -392,6 +400,8 @@ mod tests {
         let size = offset + tag.len();
         let mut profile = vec![0; size];
         profile[0..4].copy_from_slice(&(size as u32).to_be_bytes());
+        profile[12..16].copy_from_slice(b"mntr");
+        profile[16..20].copy_from_slice(b"RGB ");
         profile[36..40].copy_from_slice(b"acsp");
         profile[128..132].copy_from_slice(&1u32.to_be_bytes());
         profile[132..136].copy_from_slice(b"vcgt");
@@ -539,8 +549,26 @@ mod tests {
     fn rejects_missing_vcgt() {
         let mut profile = vec![0; 132];
         profile[0..4].copy_from_slice(&132u32.to_be_bytes());
+        profile[12..16].copy_from_slice(b"mntr");
+        profile[16..20].copy_from_slice(b"RGB ");
         profile[36..40].copy_from_slice(b"acsp");
         profile[128..132].copy_from_slice(&0u32.to_be_bytes());
+
+        assert!(parse_vcgt(&profile, 256).is_err());
+    }
+
+    #[test]
+    fn rejects_non_display_icc_profile() {
+        let mut profile = profile_with_vcgt(table_tag(1, &[0, 65535]));
+        profile[12..16].copy_from_slice(b"prtr");
+
+        assert!(parse_vcgt(&profile, 256).is_err());
+    }
+
+    #[test]
+    fn rejects_non_rgb_display_profile() {
+        let mut profile = profile_with_vcgt(table_tag(1, &[0, 65535]));
+        profile[16..20].copy_from_slice(b"CMYK");
 
         assert!(parse_vcgt(&profile, 256).is_err());
     }
