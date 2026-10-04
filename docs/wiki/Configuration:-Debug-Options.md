@@ -392,7 +392,7 @@ binds {
 
 Renders using Vulkan instead of OpenGL ES on the TTY backend.
 
-This is experimental. Effects requiring custom shaders (borders, shadows, rounded corners, blur, window animations, custom animation shaders, HDR tone mapping) are not implemented on the Vulkan renderer yet and will not render.
+This is experimental. Native Vulkan currently supports normal surface composition, borders, shadows, rounded-corner clipping, renderer-generic offscreen fades, and window-open custom shaders. GLES-only paths such as blur, xray/background effects, window-close/resize custom shaders, and some compositor UI textures still fall back or remain disabled.
 
 ```kdl
 debug {
