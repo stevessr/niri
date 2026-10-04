@@ -5,6 +5,7 @@ use smithay::backend::renderer::{
 };
 
 use crate::backend::tty::{TtyFrame, TtyRenderer};
+use crate::backend::tty_renderer::TtyOffscreen;
 
 /// Trait with our main renderer requirements to save on the typing.
 pub trait NiriRenderer:
@@ -16,6 +17,9 @@ pub trait NiriRenderer:
     + Renderer<TextureId = Self::NiriTextureId, Error = Self::NiriError>
     + AsGlesRenderer
     + AsVulkanRenderer
+    + HasOffscreen
+    + Offscreen<<Self as HasOffscreen>::Offscreen>
+    + Bind<<Self as HasOffscreen>::Offscreen>
 {
     // Associated types to work around the instability of associated type bounds.
     type NiriTextureId: Texture + Clone + Send + 'static;
@@ -34,7 +38,10 @@ where
         + Bind<Dmabuf>
         + Offscreen<GlesTexture>
         + AsGlesRenderer
-        + AsVulkanRenderer,
+        + AsVulkanRenderer
+        + HasOffscreen
+        + Offscreen<<R as HasOffscreen>::Offscreen>
+        + Bind<<R as HasOffscreen>::Offscreen>,
     R::TextureId: Texture + Clone + Send + 'static,
     R::Error:
         std::error::Error + Send + Sync + From<<GlesRenderer as RendererSuper>::Error> + 'static,
@@ -89,6 +96,41 @@ impl AsVulkanRenderer for TtyRenderer<'_> {
             TtyRenderer::Gles(_) => None,
             TtyRenderer::Vulkan(renderer) => Some(renderer.as_mut()),
         }
+    }
+}
+
+/// The offscreen render target texture type of a renderer.
+pub trait HasOffscreen: Renderer {
+    type Offscreen: Texture + Clone + Send + 'static;
+
+    fn wrap_offscreen(texture: Self::Offscreen) -> TtyOffscreen;
+    fn unwrap_offscreen(texture: &mut TtyOffscreen) -> Option<&mut Self::Offscreen>;
+}
+
+impl HasOffscreen for GlesRenderer {
+    type Offscreen = GlesTexture;
+
+    fn wrap_offscreen(texture: GlesTexture) -> TtyOffscreen {
+        TtyOffscreen::Gles(texture)
+    }
+
+    fn unwrap_offscreen(texture: &mut TtyOffscreen) -> Option<&mut GlesTexture> {
+        match texture {
+            TtyOffscreen::Gles(texture) => Some(texture),
+            TtyOffscreen::Vulkan(_) => None,
+        }
+    }
+}
+
+impl HasOffscreen for TtyRenderer<'_> {
+    type Offscreen = TtyOffscreen;
+
+    fn wrap_offscreen(texture: TtyOffscreen) -> TtyOffscreen {
+        texture
+    }
+
+    fn unwrap_offscreen(texture: &mut TtyOffscreen) -> Option<&mut TtyOffscreen> {
+        Some(texture)
     }
 }
 
