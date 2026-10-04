@@ -770,6 +770,7 @@ impl Tty {
                                         surface.hdr_restore_max_bpc = previous_max_bpc;
                                     }
                                     surface.hdr_enabled = true;
+                                    surface.hdr_error = None;
                                     Some(white)
                                 }
                                 Err(err) => {
@@ -789,6 +790,7 @@ impl Tty {
                                         );
                                     }
                                     surface.hdr_enabled = false;
+                                    surface.hdr_error = Some(format!("{err:#}"));
                                     None
                                 }
                             }
@@ -805,6 +807,7 @@ impl Tty {
                                 );
                             }
                             surface.hdr_enabled = false;
+                            surface.hdr_error = None;
                             None
                         };
 
@@ -2734,6 +2737,7 @@ impl Tty {
                                 surface.hdr_restore_max_bpc = previous_max_bpc;
                             }
                             surface.hdr_enabled = true;
+                            surface.hdr_error = None;
                             Some(white)
                         }
                         Err(err) => {
@@ -2753,6 +2757,7 @@ impl Tty {
                                 );
                             }
                             surface.hdr_enabled = false;
+                            surface.hdr_error = Some(format!("{err:#}"));
                             None
                         }
                     }
@@ -2769,6 +2774,7 @@ impl Tty {
                         );
                     }
                     surface.hdr_enabled = false;
+                    surface.hdr_error = None;
                     None
                 };
                 niri.set_output_hdr_transform(&output, hdr_sdr_white_nits);
