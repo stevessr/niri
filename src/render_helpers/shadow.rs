@@ -278,11 +278,15 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ShadowRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError> {
-        let Some(frame) = frame.as_gles_frame() else {
-            return Ok(());
-        };
-        RenderElement::<GlesRenderer>::draw(self, frame, src, dst, damage, opaque_regions, cache)?;
-        Ok(())
+        RenderElement::<TtyRenderer>::draw(
+            &self.inner,
+            frame,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            cache,
+        )
     }
 
     fn underlying_storage(
