@@ -4502,11 +4502,39 @@ impl Niri {
         elements
     }
 
+    /// Render the complete on-screen scene while leaving the final output color transform out.
+    ///
+    /// The TTY HDR path uses this to compose into an RGBA16F working framebuffer first, then
+    /// applies the transfer/gamut conversion exactly once while writing the DRM swapchain.
+    pub fn render_to_vec_without_output_transform<R: NiriRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        output: &Output,
+        include_pointer: bool,
+    ) -> Vec<OutputRenderElements<R>> {
+        let mut elements = Vec::new();
+        self.render_with_output_transform(ctx, output, include_pointer, false, &mut |elem| {
+            elements.push(elem)
+        });
+        elements
+    }
+
     pub fn render<R: NiriRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        output: &Output,
+        include_pointer: bool,
+        push: &mut dyn FnMut(OutputRenderElements<R>),
+    ) {
+        self.render_with_output_transform(ctx, output, include_pointer, true, push);
+    }
+
+    fn render_with_output_transform<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
+        apply_output_transform: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
     ) {
         let _span = tracy_client::span!("Niri::render");
@@ -4527,7 +4555,13 @@ impl Niri {
         let state = self.output_state.get(output).unwrap();
         ctx.xray = Some(&state.xray);
 
-        self.render_inner(ctx, output, include_pointer, push);
+        self.render_inner(
+            ctx,
+            output,
+            include_pointer,
+            apply_output_transform,
+            push,
+        );
 
         self.clear_xray_elements(output);
     }
@@ -4537,6 +4571,7 @@ impl Niri {
         mut ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
+        apply_output_transform: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
     ) {
         let state = self.output_state.get(output).unwrap();
@@ -4553,7 +4588,10 @@ impl Niri {
 
         // An output color transform must be the topmost framebuffer effect so it captures every
         // compositor-rendered element below it, including the software-composited pointer.
-        if state.color_transform_active && ctx.target == RenderTarget::Output {
+        if apply_output_transform
+            && state.color_transform_active
+            && ctx.target == RenderTarget::Output
+        {
             let params = FramebufferEffectRenderParams {
                 geometry: Rectangle::from_size(output_size(output)),
                 subregion: None,
