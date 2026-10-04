@@ -101,12 +101,7 @@ impl SeatHandler for State {
         // Agent pointers are deliberately not rendered as the user's hardware cursor.
         // A client changing the cursor shape on a background seat must therefore not
         // mutate the primary cursor manager.
-        if self
-            .niri
-            .agent_seats
-            .iter()
-            .any(|agent| agent.get_pointer() == seat.get_pointer())
-        {
+        if self.niri.agent_seats.iter().any(|agent| agent == seat) {
             return;
         }
         // FIXME: this hack should be removable once the screenshot UI is tracked with a
@@ -128,12 +123,7 @@ impl SeatHandler for State {
 
     fn led_state_changed(&mut self, seat: &Seat<Self>, led_state: keyboard::LedState) {
         // Synthetic keyboards must not toggle LEDs on physical keyboards.
-        if self
-            .niri
-            .agent_seats
-            .iter()
-            .any(|agent| agent.get_keyboard() == seat.get_keyboard())
-        {
+        if self.niri.agent_seats.iter().any(|agent| agent == seat) {
             return;
         }
         let keyboards = self
