@@ -606,6 +606,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         hdr_requested,
         hdr_sdr_white_nits,
         hdr_enabled,
+        hdr_error,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -737,6 +738,9 @@ fn print_output(output: Output) -> anyhow::Result<()> {
             );
         } else {
             println!("  HDR output: requested but inactive");
+        }
+        if let Some(error) = hdr_error.as_deref() {
+            println!("  HDR activation error: {error}");
         }
     } else {
         println!("  HDR output: disabled");
