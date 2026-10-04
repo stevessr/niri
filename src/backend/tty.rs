@@ -1643,7 +1643,7 @@ impl Tty {
 
         let vrr_enabled = compositor.vrr_enabled();
 
-        let (hdr_sdr_white_nits, hdr_restore_max_bpc) =
+        let (hdr_sdr_white_nits, hdr_restore_max_bpc, hdr_error) =
             if let Some(hdr) = config.hdr.as_ref() {
                 match enable_hdr10_connector(
                     &device.drm,
@@ -1656,9 +1656,10 @@ impl Tty {
                         info!(
                             "output {connector_name:?}: enabling experimental HDR10 output, SDR white {white:.1} nits"
                         );
-                        (Some(white), previous_max_bpc)
+                        (Some(white), previous_max_bpc, None)
                     }
                     Err(err) => {
+                        let error = format!("{err:#}");
                         warn!(
                             "output {connector_name:?}: cannot enable experimental HDR10: {err:?}; keeping SDR"
                         );
@@ -1672,11 +1673,11 @@ impl Tty {
                                 "output {connector_name:?}: failed to restore SDR connector properties: {reset_err:?}"
                             );
                         }
-                        (None, None)
+                        (None, None, Some(error))
                     }
                 }
             } else {
-                (None, None)
+                (None, None, None)
             };
 
         let vblank_frame_name =
@@ -1700,6 +1701,7 @@ impl Tty {
             icc_profile_state: niri_ipc::IccProfileState::Disabled,
             icc_profile_error: None,
             hdr_enabled: hdr_sdr_white_nits.is_some(),
+            hdr_error,
             hdr_restore_max_bpc,
             vblank_frame: None,
             vblank_frame_name,
