@@ -1267,6 +1267,12 @@ pub struct Output {
     /// full ICC characterization or HDR color conversion.
     #[serde(default)]
     pub icc_profile: Option<String>,
+    /// Runtime state of the configured ICC calibration on this output.
+    #[serde(default)]
+    pub icc_profile_state: Option<IccProfileState>,
+    /// Last ICC calibration error, when the runtime state is `Error`.
+    #[serde(default)]
+    pub icc_profile_error: Option<String>,
     /// HDR and wide-gamut capabilities reported by the sink and DRM connector.
     ///
     /// This describes signalling capabilities only. It does not mean that HDR composition is
@@ -1282,6 +1288,22 @@ pub struct Output {
     /// Whether niri is currently compositing this output through the experimental HDR10 path.
     #[serde(default)]
     pub hdr_enabled: bool,
+}
+
+/// Runtime state of an output ICC calibration.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum IccProfileState {
+    /// No ICC calibration is configured.
+    Disabled,
+    /// The configured ICC `vcgt` calibration is loaded in the hardware LUT.
+    Applied,
+    /// HDR output is active, so the calibration is intentionally bypassed.
+    BypassedHdr,
+    /// A Wayland gamma-control client temporarily owns the hardware LUT.
+    OverriddenGammaControl,
+    /// The configured profile could not be applied.
+    Error,
 }
 
 /// HDR and wide-gamut capabilities for an output.
