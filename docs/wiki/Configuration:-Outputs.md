@@ -378,8 +378,11 @@ The `hdr` node is fail-closed. Niri enables it only when all of the following ar
   the modern `color format` property so niri can explicitly lock the wire encoding; niri prefers
   BT.2020 RGB and otherwise may use BT.2020 YCC with YUV 4:4:4;
 - DRM exposes `HDR_OUTPUT_METADATA` and the matching BT.2020 `Colorspace` value;
-- the connector's `max bpc` property supports at least 10 bpc;
-- the DRM compositor actually selected the 10-bit `ABGR2101010` swapchain format.
+- the connector's `max bpc` range contains at least one supported value at or above 10 bpc;
+  when `max-bpc` is not configured explicitly, niri chooses the lowest valid value from
+  10/12/14/16;
+- the DRM compositor actually selected a 10-bit `ABGR2101010` or `XBGR2101010` swapchain
+  format.
 
 When enabled, niri forces compositor rendering (primary/overlay/cursor direct scanout is disabled),
 captures the full output into a 10-bit intermediate texture, decodes SDR sRGB to linear light,
