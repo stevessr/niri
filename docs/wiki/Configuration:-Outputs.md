@@ -405,7 +405,8 @@ niri msg output DP-1 hdr off
 
 Use `niri msg outputs` to inspect whether HDR was requested versus actually enabled, the chosen
 HDR10 signalling path, sink capabilities, DRM BT.2020/color-format support and the connector's
-maximum BPC before enabling it.
+maximum BPC before enabling it. If HDR was requested but activation failed, the last backend error
+is shown as `HDR activation error` and is also available as `hdr_error` in JSON IPC.
 
 On kernels/drivers without the `color format` property, experimental HDR10 remains inactive.
 This is intentionally fail-closed: an automatic link format may fall back from RGB to YCbCr for
