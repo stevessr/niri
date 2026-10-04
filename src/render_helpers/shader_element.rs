@@ -560,8 +560,7 @@ impl ShaderRenderElement {
         frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-    ) -> Result<(), TtyRendererError> {
-        use smithay::backend::renderer::multigpu::Error as MultiError;
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
         use smithay::backend::renderer::vulkan::{CustomUniform, CustomUniformValue};
 
         let _span = tracy_client::span!("ShaderRenderElement::draw_vulkan");
@@ -594,9 +593,7 @@ impl ShaderRenderElement {
             value: CustomUniformValue::Float(self.scale),
         });
 
-        frame
-            .render_custom(&program, dst, damage, &uniforms, &[], self.alpha)
-            .map_err(|err| TtyRendererError::Vulkan(MultiError::Render(err)))
+        frame.render_custom(&program, dst, damage, &uniforms, &[], self.alpha)
     }
 }
 
@@ -621,6 +618,29 @@ fn uniform_to_custom<'a>(
     })
 }
 
+impl RenderElement<smithay::backend::renderer::vulkan::VulkanRenderer>
+    for ShaderRenderElement
+{
+    fn draw(
+        &self,
+        frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), smithay::backend::renderer::vulkan::VulkanError> {
+        self.draw_vulkan(frame, dst, damage)
+    }
+
+    fn underlying_storage(
+        &self,
+        _renderer: &mut smithay::backend::renderer::vulkan::VulkanRenderer,
+    ) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}
+
 impl<'render> RenderElement<TtyRenderer<'render>> for ShaderRenderElement {
     fn draw(
         &self,
@@ -634,7 +654,11 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ShaderRenderElement {
         if let TtyFrame::Vulkan(multi) = frame {
             let frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
                 multi.as_mut();
-            return self.draw_vulkan(frame, dst, damage);
+            return self.draw_vulkan(frame, dst, damage).map_err(|err| {
+                TtyRendererError::Vulkan(
+                    smithay::backend::renderer::multigpu::Error::Render(err),
+                )
+            });
         }
 
         let Some(frame) = frame.as_gles_frame() else {
