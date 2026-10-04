@@ -4117,7 +4117,13 @@ fn enable_hdr10_connector(
             max_bpc.0 as u8
         );
     }
-    let max_bpc = configured_max_bpc.unwrap_or(MaxBpc(niri_ipc::MaxBpc::_10));
+    let max_bpc = configured_max_bpc.unwrap_or_else(|| {
+        MaxBpc(
+            capabilities
+                .hdr_bpc()
+                .expect("HDR10 signal path requires an available >=10 BPC value"),
+        )
+    });
 
     let mut props = ConnectorProperties::try_new(device, connector)?;
     let previous_max_bpc = props.max_bpc_value().ok();
