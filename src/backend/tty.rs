@@ -388,6 +388,8 @@ struct Surface {
     icc_profile_error: Option<String>,
     /// Whether this surface currently has HDR connector signalling enabled.
     hdr_enabled: bool,
+    /// Last error that prevented requested HDR from becoming active.
+    hdr_error: Option<String>,
     /// max-bpc value observed before niri first enabled HDR on this surface.
     hdr_restore_max_bpc: Option<u64>,
     /// Tracy frame that goes from vblank to vblank.
