@@ -7,8 +7,9 @@ use anyhow::{anyhow, bail, Context};
 use niri_config::OutputName;
 use niri_ipc::socket::Socket;
 use niri_ipc::{
-    Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
-    OutputConfigChanged, Overview, Request, Response, Transform, Window, WindowLayout,
+    Action, Cast, CastKind, CastTarget, Event, HdrSignalPath, IccProfileState,
+    KeyboardLayouts, LogicalOutput, Mode, Output, OutputConfigChanged, Overview, Request, Response,
+    Transform, Window, WindowLayout,
 };
 use serde_json::json;
 
@@ -598,6 +599,15 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         vrr_enabled,
         logical,
         max_bpc,
+        icc_profile,
+        icc_profile_state,
+        icc_profile_error,
+        hdr_capabilities,
+        hdr_requested,
+        hdr_sdr_white_nits,
+        hdr_enabled,
+        hdr_signal_path,
+        hdr_error,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -683,6 +693,194 @@ fn print_output(output: Output) -> anyhow::Result<()> {
 
     if let Some(max_bpc) = max_bpc {
         println!("  Max bits per channel: {max_bpc}");
+    }
+
+    if let Some(icc_profile) = icc_profile {
+        println!("  ICC profile: {icc_profile}");
+        match icc_profile_state {
+            Some(IccProfileState::Applied) => {
+                println!("  ICC calibration: applied");
+            }
+            Some(IccProfileState::BypassedHdr) => {
+                println!("  ICC calibration: suspended while HDR is active");
+            }
+            Some(IccProfileState::OverriddenGammaControl) => {
+                println!("  ICC calibration: temporarily overridden by gamma-control");
+            }
+            Some(IccProfileState::Error) => {
+                if let Some(error) = icc_profile_error.as_deref() {
+                    println!("  ICC calibration: error ({error})");
+                } else {
+                    println!("  ICC calibration: error");
+                }
+            }
+            Some(IccProfileState::Disabled) | None => {
+                println!("  ICC calibration: not applied");
+            }
+        }
+    } else if let Some(IccProfileState::Error) = icc_profile_state {
+        if let Some(error) = icc_profile_error.as_deref() {
+            println!("  ICC calibration: error ({error})");
+        }
+    }
+
+    if hdr_enabled {
+        if let Some(white) = hdr_sdr_white_nits {
+            println!(
+                "  HDR output: enabled (experimental SDR→HDR10 mapping, SDR white {white:.1} cd/m²)"
+            );
+        } else {
+            println!("  HDR output: enabled (experimental SDR→HDR10 mapping)");
+        }
+    } else if hdr_requested {
+        if let Some(white) = hdr_sdr_white_nits {
+            println!(
+                "  HDR output: requested but inactive (SDR white {white:.1} cd/m²)"
+            );
+        } else {
+            println!("  HDR output: requested but inactive");
+        }
+        if let Some(error) = hdr_error.as_deref() {
+            println!("  HDR activation error: {error}");
+        }
+    } else {
+        println!("  HDR output: disabled");
+    }
+
+    if let Some(path) = hdr_signal_path {
+        match path {
+            HdrSignalPath::Rgb => println!("  Active HDR signal path: BT.2020 RGB"),
+            HdrSignalPath::Yuv444 => {
+                println!("  Active HDR signal path: BT.2020 YCbCr 4:4:4")
+            }
+        }
+    }
+
+    if let Some(hdr) = hdr_capabilities {
+        let mut eotfs = Vec::new();
+        if hdr.traditional_hdr {
+            eotfs.push("traditional HDR");
+        }
+        if hdr.pq {
+            eotfs.push("PQ");
+        }
+        if hdr.hlg {
+            eotfs.push("HLG");
+        }
+
+        if !hdr.edid_available {
+            println!("  HDR sink capabilities: unknown (EDID unavailable)");
+        } else if eotfs.is_empty() {
+            println!("  HDR sink capabilities: not advertised");
+        } else {
+            println!("  HDR sink EOTFs: {}", eotfs.join(", "));
+
+            let mut colorimetry = Vec::new();
+            if hdr.bt2020_rgb {
+                colorimetry.push("BT.2020 RGB");
+            }
+            if hdr.bt2020_ycc {
+                colorimetry.push("BT.2020 YCC");
+            }
+            if hdr.bt2020_cycc {
+                colorimetry.push("BT.2020 cYCC");
+            }
+            if !colorimetry.is_empty() {
+                println!("  HDR colorimetry: {}", colorimetry.join(", "));
+            }
+
+            let mut luminance = Vec::new();
+            if let Some(value) = hdr.max_luminance {
+                luminance.push(format!("max {value:.2} cd/m²"));
+            }
+            if let Some(value) = hdr.max_frame_average_luminance {
+                luminance.push(format!("max frame-average {value:.2} cd/m²"));
+            }
+            if let Some(value) = hdr.min_luminance {
+                luminance.push(format!("min {value:.4} cd/m²"));
+            }
+            if !luminance.is_empty() {
+                println!("  HDR luminance: {}", luminance.join(", "));
+            }
+        }
+
+        println!(
+            "  DRM HDR signalling: metadata {}, colorspace {}",
+            if hdr.drm_hdr_metadata {
+                "available"
+            } else {
+                "unavailable"
+            },
+            if hdr.drm_colorspace {
+                "available"
+            } else {
+                "unavailable"
+            },
+        );
+
+        if hdr.drm_colorspace {
+            let mut colorimetry = Vec::new();
+            if hdr.drm_bt2020_rgb {
+                colorimetry.push("BT2020_RGB");
+            }
+            if hdr.drm_bt2020_ycc {
+                colorimetry.push("BT2020_YCC");
+            }
+            if hdr.drm_bt2020_cycc {
+                colorimetry.push("BT2020_CYCC");
+            }
+
+            if colorimetry.is_empty() {
+                println!("  DRM BT.2020 signalling: unavailable");
+            } else {
+                println!("  DRM BT.2020 signalling: {}", colorimetry.join(", "));
+            }
+        }
+
+        if hdr.drm_color_format {
+            let mut formats = Vec::new();
+            if hdr.drm_rgb444 {
+                formats.push("RGB");
+            }
+            if hdr.drm_yuv444 {
+                formats.push("YUV 4:4:4");
+            }
+            if hdr.drm_yuv422 {
+                formats.push("YUV 4:2:2");
+            }
+            if hdr.drm_yuv420 {
+                formats.push("YUV 4:2:0");
+            }
+            if formats.is_empty() {
+                println!("  DRM output color formats: property present, no known formats");
+            } else {
+                println!("  DRM output color formats: {}", formats.join(", "));
+            }
+        } else {
+            println!("  DRM output color format selection: legacy/automatic");
+        }
+
+        match (hdr.drm_min_bpc, hdr.drm_max_bpc) {
+            (Some(min_bpc), Some(max_bpc)) => {
+                println!("  DRM BPC capability: {min_bpc}–{max_bpc}");
+            }
+            (_, Some(max_bpc)) => {
+                println!("  DRM maximum BPC capability: {max_bpc}");
+            }
+            _ => {}
+        }
+
+        match hdr.hdr10_signal_path() {
+            Some(HdrSignalPath::Rgb) => {
+                println!("  HDR10 signalling candidate: BT.2020 RGB");
+            }
+            Some(HdrSignalPath::Yuv444) => {
+                println!("  HDR10 signalling candidate: BT.2020 YCbCr 4:4:4");
+            }
+            None => {
+                println!("  HDR10 signalling candidate: unavailable");
+            }
+        }
     }
 
     println!("  Available modes:");

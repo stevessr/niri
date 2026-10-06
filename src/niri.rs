@@ -163,8 +163,11 @@ use crate::protocols::mutter_x11_interop::MutterX11InteropManagerState;
 use crate::protocols::output_management::OutputManagementManagerState;
 use crate::protocols::screencopy::{Screencopy, ScreencopyBuffer, ScreencopyManagerState};
 use crate::protocols::virtual_pointer::VirtualPointerManagerState;
+use crate::render_helpers::background_effect::RenderParams as FramebufferEffectRenderParams;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
+use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
+use crate::render_helpers::offscreen::OffscreenRenderElement;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -491,6 +494,13 @@ pub struct OutputState {
     pub frame_clock: FrameClock,
     pub redraw_state: RedrawState,
     pub on_demand_vrr_enabled: bool,
+    /// Whether this output requires every visible element to go through compositor rendering.
+    ///
+    /// Output-wide color transforms (for example HDR transfer/gamut conversion or a future full
+    /// ICC transform) must set this to true so DRM planes cannot bypass the transform.
+    pub color_transform_active: bool,
+    color_transform_sdr_white_nits: f32,
+    color_transform_effect: FramebufferEffect,
     // After the last redraw, some ongoing animations still remain.
     pub unfinished_animations_remain: bool,
     /// Last sequence received in a vblank event.
@@ -2178,6 +2188,16 @@ impl State {
                 }
             }
             niri_ipc::OutputAction::MaxBpc { max_bpc } => config.max_bpc = Some(MaxBpc(max_bpc)),
+            niri_ipc::OutputAction::IccProfile { path } => config.icc_profile = Some(path),
+            niri_ipc::OutputAction::ResetIccProfile {} => config.icc_profile = None,
+            niri_ipc::OutputAction::Hdr {
+                enabled,
+                sdr_white_nits,
+            } => {
+                config.hdr = enabled.then_some(niri_config::output::Hdr {
+                    sdr_white_nits: sdr_white_nits.map(FloatOrInt),
+                });
+            }
         });
 
         self.reload_output_config();
@@ -2199,6 +2219,19 @@ impl State {
                 .find(|output| output.name() == ipc_output.name)
                 .map(logical_output);
             ipc_output.logical = logical;
+
+            let name = OutputName::from_ipc_output(ipc_output);
+            let output_config = self.niri.config.borrow().outputs.find(&name).cloned();
+            ipc_output.icc_profile = output_config
+                .as_ref()
+                .and_then(|config| config.icc_profile.clone());
+            ipc_output.hdr_requested = output_config
+                .as_ref()
+                .is_some_and(|config| config.hdr.is_some());
+            ipc_output.hdr_sdr_white_nits = output_config
+                .as_ref()
+                .and_then(|config| config.hdr.as_ref())
+                .map(|hdr| hdr.sdr_white_nits());
         }
 
         #[cfg(feature = "dbus")]
@@ -3201,6 +3234,9 @@ impl Niri {
             global,
             redraw_state: RedrawState::Idle,
             on_demand_vrr_enabled: false,
+            color_transform_active: false,
+            color_transform_sdr_white_nits: 203.,
+            color_transform_effect: FramebufferEffect::new(),
             unfinished_animations_remain: false,
             frame_clock: FrameClock::new(refresh_interval, vrr),
             last_drm_sequence: None,
@@ -3223,6 +3259,50 @@ impl Niri {
 
     pub fn output_exists(&self, output: &Output) -> bool {
         self.output_state.contains_key(output)
+    }
+
+    pub fn output_hdr_sdr_white_nits(&self, output: &Output) -> Option<f32> {
+        let state = self.output_state.get(output)?;
+        state
+            .color_transform_active
+            .then_some(state.color_transform_sdr_white_nits)
+    }
+
+    /// Enable or disable an output-wide compositor color transform.
+    ///
+    /// The TTY backend observes this state to disable all DRM plane scanout paths that could
+    /// bypass the transform.
+    pub fn set_output_hdr_transform(&mut self, output: &Output, sdr_white_nits: Option<f32>) {
+        let active = sdr_white_nits.is_some();
+        let white = sdr_white_nits.unwrap_or(203.).clamp(80., 500.);
+
+        let changed = {
+            let Some(state) = self.output_state.get_mut(output) else {
+                return;
+            };
+            if state.color_transform_active == active
+                && (!active || state.color_transform_sdr_white_nits == white)
+            {
+                false
+            } else {
+                state.color_transform_active = active;
+                state.color_transform_sdr_white_nits = white;
+                state.color_transform_effect.damage();
+                true
+            }
+        };
+
+        if !changed {
+            return;
+        }
+
+        if active {
+            // Gamma ramps operate after the compositor transform and would corrupt PQ. Force any
+            // existing gamma-control client to relinquish this output while HDR is active.
+            self.gamma_control_manager_state.output_removed(output);
+        }
+
+        self.queue_redraw(output);
     }
 
     /// Converts a `WlOutput` to a corresponding `Output` if it exists.
@@ -4568,11 +4648,49 @@ impl Niri {
         elements
     }
 
+    /// Render the complete on-screen scene while leaving the final output color transform out.
+    ///
+    /// The TTY HDR path uses this to compose into an RGBA16F working framebuffer first, then
+    /// applies the transfer/gamut conversion exactly once while writing the DRM swapchain.
+    pub fn render_to_vec_without_output_transform<R: NiriRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        output: &Output,
+        include_pointer: bool,
+    ) -> Vec<OutputRenderElements<R>>
+    where
+        R::Error: Send + Sync + 'static,
+        WindowMruUiRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
+        let mut elements = Vec::new();
+        self.render_with_output_transform(ctx, output, include_pointer, false, &mut |elem| {
+            elements.push(elem)
+        });
+        elements
+    }
+
     pub fn render<R: NiriRenderer>(
+        &self,
+        ctx: RenderCtx<R>,
+        output: &Output,
+        include_pointer: bool,
+        push: &mut dyn FnMut(OutputRenderElements<R>),
+    )
+    where
+        R::Error: Send + Sync + 'static,
+        WindowMruUiRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
+        self.render_with_output_transform(ctx, output, include_pointer, true, push);
+    }
+
+    fn render_with_output_transform<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
+        apply_output_transform: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
     )
     where
@@ -4600,7 +4718,13 @@ impl Niri {
         let state = self.output_state.get(output).unwrap();
         ctx.xray = Some(&state.xray);
 
-        self.render_inner(ctx, output, include_pointer, push);
+        self.render_inner(
+            ctx,
+            output,
+            include_pointer,
+            apply_output_transform,
+            push,
+        );
 
         self.clear_xray_elements(output);
     }
@@ -4610,6 +4734,7 @@ impl Niri {
         mut ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
+        apply_output_transform: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
     )
     where
@@ -4628,6 +4753,26 @@ impl Niri {
         } else {
             push
         };
+
+        // An output color transform must be the topmost framebuffer effect so it captures every
+        // compositor-rendered element below it, including the software-composited pointer.
+        if apply_output_transform
+            && state.color_transform_active
+            && ctx.target == RenderTarget::Output
+        {
+            let params = FramebufferEffectRenderParams {
+                geometry: Rectangle::from_size(output_size(output)),
+                subregion: None,
+                clip: None,
+                scale: output.current_scale().fractional_scale(),
+            };
+            push(
+                state
+                    .color_transform_effect
+                    .render_output_hdr(params, state.color_transform_sdr_white_nits)
+                    .into(),
+            );
+        }
 
         // The pointer goes on the top.
         if include_pointer && self.pointer_visibility.is_visible() {
@@ -7409,5 +7554,7 @@ niri_render_elements! {
         Texture = PrimaryGpuTextureRenderElement,
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
+        OutputColorTransform = FramebufferEffectElement,
+        HdrScene = OffscreenRenderElement,
     }
 }

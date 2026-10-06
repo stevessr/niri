@@ -31,6 +31,8 @@ pub struct FramebufferEffectElement {
     id: Id,
     commit: CommitCounter,
     geometry: Rectangle<f64, Logical>,
+    format: Fourcc,
+    program: FramebufferEffectProgram,
     clip_geo: Rectangle<f64, Logical>,
     corner_radius: CornerRadius,
     subregion: Option<TransformedRegion>,
@@ -38,6 +40,12 @@ pub struct FramebufferEffectElement {
     blur_options: Option<BlurOptions>,
     noise: f32,
     saturation: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FramebufferEffectProgram {
+    Standard,
+    OutputHdr { sdr_white_nits: f32 },
 }
 
 #[derive(Debug)]
@@ -82,6 +90,8 @@ impl FramebufferEffect {
             id,
             commit: self.commit,
             geometry: params.geometry,
+            format: Fourcc::Abgr8888,
+            program: FramebufferEffectProgram::Standard,
             clip_geo,
             corner_radius,
             subregion: params.subregion,
@@ -91,14 +101,39 @@ impl FramebufferEffect {
             saturation,
         }
     }
+
+    pub fn render_output_hdr(
+        &self,
+        params: RenderParams,
+        sdr_white_nits: f32,
+    ) -> FramebufferEffectElement {
+        let (clip_geo, corner_radius) = params
+            .clip
+            .unwrap_or((params.geometry, CornerRadius::default()));
+
+        FramebufferEffectElement {
+            id: self.id.clone(),
+            commit: self.commit,
+            geometry: params.geometry,
+            format: Fourcc::Abgr2101010,
+            program: FramebufferEffectProgram::OutputHdr { sdr_white_nits },
+            clip_geo,
+            corner_radius,
+            subregion: params.subregion,
+            scale: params.scale as f32,
+            blur_options: None,
+            noise: 0.,
+            saturation: 1.,
+        }
+    }
 }
 
 impl FramebufferEffectElement {
-    fn compute_uniforms(
+    fn compute_geometry_uniforms(
         &self,
         crop: Rectangle<f64, Logical>,
         transform: Transform,
-    ) -> [Uniform<'static>; 7] {
+    ) -> [Uniform<'static>; 4] {
         let offset = crop.loc - (self.clip_geo.loc - self.geometry.loc);
         let offset = Vec2::new(offset.x as f32, offset.y as f32);
         let crop_size = Vec2::new(crop.size.w as f32, crop.size.h as f32);
@@ -121,10 +156,26 @@ impl FramebufferEffectElement {
             Uniform::new("geo_size", clip_geo_size),
             Uniform::new("corner_radius", <[f32; 4]>::from(self.corner_radius)),
             mat3_uniform("input_to_geo", input_to_clip_geo),
-            Uniform::new("noise", self.noise),
-            Uniform::new("saturation", self.saturation),
-            Uniform::new("bg_color", [0f32, 0., 0., 0.]),
         ]
+    }
+
+    fn compute_uniforms(
+        &self,
+        crop: Rectangle<f64, Logical>,
+        transform: Transform,
+    ) -> Vec<Uniform<'static>> {
+        let mut uniforms = Vec::from(self.compute_geometry_uniforms(crop, transform));
+        match self.program {
+            FramebufferEffectProgram::Standard => {
+                uniforms.push(Uniform::new("noise", self.noise));
+                uniforms.push(Uniform::new("saturation", self.saturation));
+                uniforms.push(Uniform::new("bg_color", [0f32, 0., 0., 0.]));
+            }
+            FramebufferEffectProgram::OutputHdr { sdr_white_nits } => {
+                uniforms.push(Uniform::new("sdr_white_nits", sdr_white_nits));
+            }
+        }
+        uniforms
     }
 }
 
@@ -227,7 +278,7 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
             } else {
                 trace!("creating framebuffer texture sized {} × {}", size.w, size.h);
                 let renderer = guard.as_mut();
-                let texture = renderer.create_buffer(Fourcc::Abgr8888, size)?;
+                let texture = renderer.create_buffer(self.format, size)?;
                 inner.framebuffer.insert(texture)
             };
 
@@ -388,11 +439,15 @@ impl RenderElement<GlesRenderer> for FramebufferEffectElement {
             clamped_dst.size.to_f64().upscale(dst_to_src).to_logical(1.),
         );
 
-        let program = Shaders::get_from_frame(frame).postprocess_and_clip.clone();
+        let shaders = Shaders::get_from_frame(frame);
+        let program = match self.program {
+            FramebufferEffectProgram::Standard => shaders.postprocess_and_clip.clone(),
+            FramebufferEffectProgram::OutputHdr { .. } => shaders.output_hdr.clone(),
+        };
         let uniforms = program
             .is_some()
             .then(|| self.compute_uniforms(crop, frame.transformation()));
-        let uniforms = uniforms.as_ref().map_or(&[][..], |x| &x[..]);
+        let uniforms = uniforms.as_deref().unwrap_or(&[]);
 
         frame.render_texture_from_to(
             texture,

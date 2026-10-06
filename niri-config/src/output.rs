@@ -61,6 +61,10 @@ pub struct Output {
     pub position: Option<Position>,
     #[knuffel(child, unwrap(argument))]
     pub max_bpc: Option<MaxBpc>,
+    #[knuffel(child, unwrap(argument))]
+    pub icc_profile: Option<String>,
+    #[knuffel(child)]
+    pub hdr: Option<Hdr>,
     #[knuffel(child)]
     pub mode: Option<Mode>,
     #[knuffel(child)]
@@ -104,6 +108,8 @@ impl Default for Output {
             transform: Transform::Normal,
             position: None,
             max_bpc: None,
+            icc_profile: None,
+            hdr: None,
             mode: None,
             modeline: None,
             variable_refresh_rate: None,
@@ -133,6 +139,20 @@ pub struct Position {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MaxBpc(pub niri_ipc::MaxBpc);
+
+/// Experimental HDR10 output configuration.
+#[derive(knuffel::Decode, Debug, Clone, PartialEq, Default)]
+pub struct Hdr {
+    /// SDR diffuse-white luminance when mapping SDR compositor content into PQ.
+    #[knuffel(property)]
+    pub sdr_white_nits: Option<FloatOrInt<80, 500>>,
+}
+
+impl Hdr {
+    pub fn sdr_white_nits(&self) -> f32 {
+        self.sdr_white_nits.map_or(203.0, |value| value.0 as f32)
+    }
+}
 
 #[derive(knuffel::Decode, Debug, Clone, PartialEq, Default)]
 pub struct Vrr {

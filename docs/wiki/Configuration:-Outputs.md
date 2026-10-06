@@ -16,6 +16,7 @@ output "eDP-1" {
     focus-at-startup
     backdrop-color "#001100"
     // max-bpc 8
+    // icc-profile "~/.local/share/color/icc/display.icc"
 
     hot-corners {
         // off
@@ -300,6 +301,129 @@ output "HDMI-A-1" {
     max-bpc 8
 }
 ```
+
+### `icc-profile`
+
+<sup>Since: next release</sup>
+
+Apply the display calibration stored in an ICC profile to this output.
+
+```kdl
+output "DP-1" {
+    icc-profile "~/.local/share/color/icc/display.icc"
+}
+```
+
+Niri currently accepts RGB display/monitor ICC profiles (device class `mntr`, device color
+space `RGB `), reads the profile's `vcgt` (video card gamma table) tag, and loads it into the
+output's hardware gamma LUT. Both table-based and formula-based ColorSync `vcgt` data are
+supported, and the curves are resampled to the LUT size exposed by the DRM driver.
+
+This is **display calibration**, not full ICC color conversion. The profile's characterization
+data is not yet used to transform application content between color spaces, and this option does
+not enable HDR by itself. When the experimental HDR10 path is active, niri suspends the hardware
+`vcgt` calibration because a downstream gamma LUT would corrupt the PQ transfer function.
+
+The calibration is reapplied after output configuration changes, reconnects and session resume.
+A Wayland gamma-control client may temporarily override it; when the client releases the output,
+niri restores the configured ICC calibration.
+
+`niri msg outputs` reports the runtime calibration state separately from the configured path:
+`applied`, suspended for HDR, temporarily overridden by gamma-control, or an apply error. The JSON
+IPC exposes the same state as `icc_profile_state` and the last failure as
+`icc_profile_error`.
+
+If the profile cannot be read, has no supported `vcgt` tag, or the output has no programmable
+gamma LUT, niri records the error, logs it, and resets that output to a linear gamma ramp.
+
+Use the IPC output actions to change the profile without editing the config file:
+
+```sh
+niri msg output DP-1 icc-profile ~/.local/share/color/icc/display.icc
+niri msg output DP-1 reset-icc-profile
+```
+
+### HDR capability reporting
+
+<sup>Since: next release</sup>
+
+`niri msg outputs` also reports HDR and wide-gamut signalling capabilities detected from the
+monitor EDID and DRM connector properties. Niri parses CTA-861 blocks directly so this works even
+on distributions with older libdisplay-info versions.
+
+The reported information includes:
+
+- PQ (SMPTE ST 2084), HLG and traditional HDR EOTF support;
+- BT.2020 RGB, YCC and constant-luminance YCC signalling support;
+- Static Metadata Type 1 support and advertised min/max/frame-average luminance;
+- whether the DRM connector exposes `HDR_OUTPUT_METADATA`, `Colorspace`, and the modern
+  `color format` selector (RGB / YUV 4:4:4 / 4:2:2 / 4:2:0).
+
+These fields are also present in the JSON IPC output as `hdr_capabilities`. The DRM
+`color format` values are capability candidates rather than a guarantee for every
+mode/bit-depth combination; activation still has to pass the driver's atomic commit.
+
+### Experimental HDR10 output
+
+HDR10 output can be enabled explicitly per output:
+
+```kdl
+output "DP-1" {
+    hdr sdr-white-nits=203
+}
+```
+
+The `hdr` node is fail-closed. Niri enables it only when all of the following are true:
+
+- the EDID advertises PQ and Static Metadata Type 1;
+- there is at least one complete BT.2020 signal path shared by the sink and DRM, and DRM exposes
+  the modern `color format` property so niri can explicitly lock the wire encoding; niri prefers
+  BT.2020 RGB and otherwise may use BT.2020 YCC with YUV 4:4:4;
+- DRM exposes `HDR_OUTPUT_METADATA` and the matching BT.2020 `Colorspace` value;
+- the connector's `max bpc` range contains at least one supported value at or above 10 bpc;
+  when `max-bpc` is not configured explicitly, niri chooses the lowest valid value from
+  10/12/14/16;
+- the DRM compositor actually selected a 10-bit `ABGR2101010` or `XBGR2101010` swapchain
+  format.
+
+When enabled, niri forces compositor rendering (primary/overlay/cursor direct scanout is disabled),
+captures the full output into a 10-bit intermediate texture, decodes SDR sRGB to linear light,
+converts Rec.709 primaries to BT.2020, maps SDR diffuse white to `sdr-white-nits` (203 nits by
+default), and encodes the result with SMPTE ST 2084 (PQ). It then programs BT.2020 and
+`HDR_OUTPUT_METADATA` on the connector in the same output mode.
+
+This first HDR path maps the existing SDR compositor scene into an HDR10 container; native HDR
+Wayland client content is not accepted yet. Full client color management still requires
+`color-management-v1` image-description handling and per-surface transforms.
+
+ICC `vcgt` calibration and the wlr gamma-control protocol are suspended while HDR is active,
+because a downstream hardware gamma ramp would corrupt the PQ transfer function. They are restored
+when HDR is disabled.
+
+HDR connector programming is reversible. Before the first successful HDR activation niri records
+the connector's current `max bpc`, `Colorspace`, and `color format` values. Disabling HDR (or
+falling back after a later activation failure) restores those pre-HDR values, except that an
+explicitly configured `max-bpc` remains authoritative. This prevents an HDR toggle from silently
+destroying a pre-existing connector signal configuration.
+
+Runtime control is also available:
+
+```sh
+niri msg output DP-1 hdr on
+niri msg output DP-1 hdr on --sdr-white-nits 203
+niri msg output DP-1 hdr off
+```
+
+Use `niri msg outputs` to inspect whether HDR was requested versus actually enabled, the selected
+runtime HDR10 wire path (BT.2020 RGB or YCbCr 4:4:4), sink capabilities, DRM
+BT.2020/color-format support and the connector BPC range. JSON IPC exposes the actual active path as
+`hdr_signal_path`. If HDR was requested but activation failed, the last backend error is shown as
+`HDR activation error` and is also available as `hdr_error`.
+
+On kernels/drivers without the `color format` property, experimental HDR10 remains inactive.
+This is intentionally fail-closed: an automatic link format may fall back from RGB to YCbCr for
+bandwidth reasons, so niri does not advertise a BT.2020 Colorspace unless it can also lock the
+matching wire encoding.
 
 ### `hot-corners`
 

@@ -1103,6 +1103,31 @@ pub enum OutputAction {
         #[cfg_attr(feature = "clap", arg())]
         max_bpc: MaxBpc,
     },
+    /// Set the ICC display profile used for hardware calibration.
+    IccProfile {
+        /// Path to an ICC profile containing a `vcgt` calibration tag.
+        #[cfg_attr(feature = "clap", arg())]
+        path: String,
+    },
+    /// Stop applying an ICC display calibration profile.
+    ResetIccProfile {},
+    /// Enable or disable the experimental HDR10 output path.
+    Hdr {
+        /// Whether to enable HDR.
+        #[cfg_attr(
+            feature = "clap",
+            arg(
+                value_name = "ON|OFF",
+                action = clap::ArgAction::Set,
+                value_parser = clap::builder::BoolishValueParser::new(),
+                hide_possible_values = true,
+            ),
+        )]
+        enabled: bool,
+        /// SDR diffuse-white luminance in nits. Defaults to 203.
+        #[cfg_attr(feature = "clap", arg(long))]
+        sdr_white_nits: Option<f64>,
+    },
 }
 
 /// Output mode to set.
@@ -1236,6 +1261,175 @@ pub struct Output {
     pub logical: Option<LogicalOutput>,
     /// Maximum bits per channel (bit depth), if known.
     pub max_bpc: Option<u8>,
+    /// Configured ICC display profile path, if any.
+    ///
+    /// Niri currently uses the profile's `vcgt` tag for hardware calibration. This does not imply
+    /// full ICC characterization or HDR color conversion.
+    #[serde(default)]
+    pub icc_profile: Option<String>,
+    /// Runtime state of the configured ICC calibration on this output.
+    #[serde(default)]
+    pub icc_profile_state: Option<IccProfileState>,
+    /// Last ICC calibration error, when the runtime state is `Error`.
+    #[serde(default)]
+    pub icc_profile_error: Option<String>,
+    /// HDR and wide-gamut capabilities reported by the sink and DRM connector.
+    ///
+    /// This describes signalling capabilities only. It does not mean that HDR composition is
+    /// currently enabled.
+    #[serde(default)]
+    pub hdr_capabilities: Option<HdrCapabilities>,
+    /// Whether HDR is requested for this output in the current configuration.
+    #[serde(default)]
+    pub hdr_requested: bool,
+    /// Requested SDR diffuse-white luminance for HDR mapping, in cd/m².
+    #[serde(default)]
+    pub hdr_sdr_white_nits: Option<f32>,
+    /// Whether niri is currently compositing this output through the experimental HDR10 path.
+    #[serde(default)]
+    pub hdr_enabled: bool,
+    /// HDR10 wire signalling path currently programmed on the connector.
+    #[serde(default)]
+    pub hdr_signal_path: Option<HdrSignalPath>,
+    /// Last error that prevented a requested HDR mode from becoming active.
+    #[serde(default)]
+    pub hdr_error: Option<String>,
+}
+
+/// Runtime state of an output ICC calibration.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum IccProfileState {
+    /// No ICC calibration is configured.
+    Disabled,
+    /// The configured ICC `vcgt` calibration is loaded in the hardware LUT.
+    Applied,
+    /// HDR output is active, so the calibration is intentionally bypassed.
+    BypassedHdr,
+    /// A Wayland gamma-control client temporarily owns the hardware LUT.
+    OverriddenGammaControl,
+    /// The configured profile could not be applied.
+    Error,
+}
+
+/// HDR and wide-gamut capabilities for an output.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct HdrCapabilities {
+    /// Whether an EDID blob was available for capability detection.
+    pub edid_available: bool,
+    /// Whether the EDID contains a CTA HDR Static Metadata Data Block.
+    pub static_metadata: bool,
+    /// Traditional HDR EOTF support.
+    pub traditional_hdr: bool,
+    /// SMPTE ST 2084 (PQ) EOTF support.
+    pub pq: bool,
+    /// Hybrid Log-Gamma (HLG) EOTF support.
+    pub hlg: bool,
+    /// Static Metadata Type 1 support.
+    pub static_metadata_type1: bool,
+    /// BT.2020 constant-luminance YCC signalling support.
+    pub bt2020_cycc: bool,
+    /// BT.2020 YCC signalling support.
+    pub bt2020_ycc: bool,
+    /// BT.2020 RGB signalling support.
+    pub bt2020_rgb: bool,
+    /// Desired content maximum luminance in cd/m², when advertised.
+    pub max_luminance: Option<f32>,
+    /// Desired content maximum frame-average luminance in cd/m², when advertised.
+    pub max_frame_average_luminance: Option<f32>,
+    /// Desired content minimum luminance in cd/m², when advertised.
+    pub min_luminance: Option<f32>,
+    /// Whether the DRM connector exposes HDR_OUTPUT_METADATA.
+    pub drm_hdr_metadata: bool,
+    /// Whether the DRM connector exposes the Colorspace property.
+    pub drm_colorspace: bool,
+    /// Whether the DRM Colorspace property can signal BT.2020 RGB.
+    pub drm_bt2020_rgb: bool,
+    /// Whether the DRM Colorspace property can signal BT.2020 YCC.
+    pub drm_bt2020_ycc: bool,
+    /// Whether the DRM Colorspace property can signal BT.2020 constant-luminance YCC.
+    pub drm_bt2020_cycc: bool,
+    /// Whether the DRM connector exposes the modern `color format` property.
+    #[serde(default)]
+    pub drm_color_format: bool,
+    /// Whether the connector can explicitly request RGB 4:4:4 output.
+    #[serde(default)]
+    pub drm_rgb444: bool,
+    /// Whether the connector can explicitly request YCbCr 4:4:4 output.
+    #[serde(default)]
+    pub drm_yuv444: bool,
+    /// Whether the connector can explicitly request YCbCr 4:2:2 output.
+    #[serde(default)]
+    pub drm_yuv422: bool,
+    /// Whether the connector can explicitly request YCbCr 4:2:0 output.
+    #[serde(default)]
+    pub drm_yuv420: bool,
+    /// Minimum BPC accepted by the DRM connector property, when exposed.
+    #[serde(default)]
+    pub drm_min_bpc: Option<u8>,
+    /// Maximum BPC accepted by the DRM connector property, when exposed.
+    pub drm_max_bpc: Option<u8>,
+}
+
+/// HDR10 wire signalling path selected from sink and DRM capabilities.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum HdrSignalPath {
+    /// BT.2020 RGB over an RGB output link.
+    Rgb,
+    /// BT.2020 non-constant-luminance YCbCr over a YCbCr 4:4:4 output link.
+    Yuv444,
+}
+
+impl HdrCapabilities {
+    /// Return the safest HDR10 signalling path candidate advertised by the sink and DRM.
+    ///
+    /// A candidate requires the modern DRM `color format` property so niri can lock the actual
+    /// wire encoding to the same RGB/YUV family as the BT.2020 Colorspace value. The property
+    /// values are capability hints: the final mode/bit-depth combination is validated by the DRM
+    /// atomic commit when HDR is activated.
+    pub fn hdr10_signal_path(&self) -> Option<HdrSignalPath> {
+        if !self.edid_available
+            || !self.pq
+            || !self.static_metadata_type1
+            || !self.drm_hdr_metadata
+            || self.hdr_bpc().is_none()
+        {
+            return None;
+        }
+
+        if self.bt2020_rgb
+            && self.drm_bt2020_rgb
+            && self.drm_color_format
+            && self.drm_rgb444
+        {
+            return Some(HdrSignalPath::Rgb);
+        }
+
+        if self.bt2020_ycc
+            && self.drm_bt2020_ycc
+            && self.drm_color_format
+            && self.drm_yuv444
+        {
+            return Some(HdrSignalPath::Yuv444);
+        }
+
+        None
+    }
+
+    pub fn hdr_bpc(&self) -> Option<MaxBpc> {
+        let min = self.drm_min_bpc?;
+        let max = self.drm_max_bpc?;
+
+        [MaxBpc::_10, MaxBpc::_12, MaxBpc::_14, MaxBpc::_16]
+            .into_iter()
+            .find(|bpc| {
+                let value = *bpc as u8;
+                (min..=max).contains(&value)
+            })
+    }
+
 }
 
 /// Output mode.
@@ -2101,6 +2295,17 @@ impl OutputAction {
                 }
                 Ok(())
             }
+            OutputAction::Hdr {
+                sdr_white_nits: Some(value),
+                ..
+            } => {
+                if !value.is_finite() || !(80.0..=500.0).contains(value) {
+                    return Err(format!(
+                        "HDR SDR white {value} nits must be finite and between 80 and 500"
+                    ));
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -2109,6 +2314,88 @@ impl OutputAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hdr10_base_capabilities() -> HdrCapabilities {
+        HdrCapabilities {
+            edid_available: true,
+            pq: true,
+            static_metadata_type1: true,
+            drm_hdr_metadata: true,
+            drm_min_bpc: Some(8),
+            drm_max_bpc: Some(10),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hdr_bpc_selects_lowest_supported_value_at_or_above_10() {
+        let capabilities = HdrCapabilities {
+            drm_min_bpc: Some(11),
+            drm_max_bpc: Some(16),
+            ..Default::default()
+        };
+        assert_eq!(capabilities.hdr_bpc(), Some(MaxBpc::_12));
+
+        let no_hdr_bpc = HdrCapabilities {
+            drm_min_bpc: Some(6),
+            drm_max_bpc: Some(8),
+            ..Default::default()
+        };
+        assert_eq!(no_hdr_bpc.hdr_bpc(), None);
+    }
+
+    #[test]
+    fn hdr10_requires_explicit_color_format_for_rgb() {
+        let legacy = HdrCapabilities {
+            bt2020_rgb: true,
+            drm_bt2020_rgb: true,
+            ..hdr10_base_capabilities()
+        };
+        assert_eq!(legacy.hdr10_signal_path(), None);
+
+        let explicit_rgb = HdrCapabilities {
+            drm_color_format: true,
+            drm_rgb444: true,
+            ..legacy
+        };
+        assert_eq!(
+            explicit_rgb.hdr10_signal_path(),
+            Some(HdrSignalPath::Rgb)
+        );
+    }
+
+    #[test]
+    fn hdr10_requires_explicit_color_format_for_yuv() {
+        let legacy = HdrCapabilities {
+            bt2020_ycc: true,
+            drm_bt2020_ycc: true,
+            ..hdr10_base_capabilities()
+        };
+        assert_eq!(legacy.hdr10_signal_path(), None);
+
+        let explicit_yuv = HdrCapabilities {
+            drm_color_format: true,
+            drm_yuv444: true,
+            ..legacy
+        };
+        assert_eq!(
+            explicit_yuv.hdr10_signal_path(),
+            Some(HdrSignalPath::Yuv444)
+        );
+    }
+
+    #[test]
+    fn hdr10_respects_explicit_rgb_format_support() {
+        let capabilities = HdrCapabilities {
+            bt2020_rgb: true,
+            drm_bt2020_rgb: true,
+            drm_color_format: true,
+            drm_rgb444: false,
+            ..hdr10_base_capabilities()
+        };
+
+        assert_eq!(capabilities.hdr10_signal_path(), None);
+    }
 
     #[test]
     fn parse_size_change() {

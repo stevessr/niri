@@ -56,7 +56,7 @@ pub use crate::input::{
 pub use crate::layer_rule::LayerRule;
 pub use crate::layout::*;
 pub use crate::misc::*;
-pub use crate::output::{Output, OutputName, Outputs, Position, Vrr};
+pub use crate::output::{Hdr, Output, OutputName, Outputs, Position, Vrr};
 use crate::recent_windows::RecentWindowsPart;
 pub use crate::recent_windows::{MruDirection, MruFilter, MruPreviews, MruScope, RecentWindows};
 pub use crate::utils::FloatOrInt;
@@ -769,6 +769,8 @@ mod tests {
                 position x=10 y=20
                 mode "1920x1080@144"
                 max-bpc 10
+                icc-profile "/tmp/display.icc"
+                hdr sdr-white-nits=203
                 variable-refresh-rate on-demand=true
                 background-color "rgba(25, 25, 102, 1.0)"
                 hot-corners {
@@ -1223,6 +1225,18 @@ mod tests {
                                 _10,
                             ),
                         ),
+                        icc_profile: Some(
+                            "/tmp/display.icc",
+                        ),
+                        hdr: Some(
+                            Hdr {
+                                sdr_white_nits: Some(
+                                    FloatOrInt(
+                                        203.0,
+                                    ),
+                                ),
+                            },
+                        ),
                         mode: Some(
                             Mode {
                                 custom: false,
@@ -1269,6 +1283,8 @@ mod tests {
                         transform: Normal,
                         position: None,
                         max_bpc: None,
+                        icc_profile: None,
+                        hdr: None,
                         mode: Some(
                             Mode {
                                 custom: true,
@@ -1296,6 +1312,8 @@ mod tests {
                         transform: Normal,
                         position: None,
                         max_bpc: None,
+                        icc_profile: None,
+                        hdr: None,
                         mode: None,
                         modeline: Some(
                             Modeline {

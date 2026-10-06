@@ -7,7 +7,7 @@ use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement
 use smithay::backend::renderer::element::{
     Element, Id, Kind, RenderElement, RenderElementStates, UnderlyingStorage,
 };
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::{
     CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
@@ -20,6 +20,7 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, T
 
 use super::encompassing_geo;
 use super::renderer::{AsGlesFrame as _, HasOffscreen, NiriRenderer};
+use super::shaders::Shaders;
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 use crate::backend::tty_renderer::TtyOffscreen;
 
@@ -59,6 +60,14 @@ pub struct OffscreenRenderElement {
     src_size: Size<i32, Buffer>,
     alpha: f32,
     kind: Kind,
+    program: OffscreenProgram,
+    sync: Option<SyncPoint>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OffscreenProgram {
+    Standard,
+    OutputHdr { sdr_white_nits: f32 },
 }
 
 #[derive(Debug)]
@@ -79,7 +88,20 @@ impl OffscreenBuffer {
     where
         R::Error: Send + Sync + 'static,
     {
-        let _span = tracy_client::span!("OffscreenBuffer::render");
+        self.render_with_format(renderer, scale, Fourcc::Abgr8888, elements)
+    }
+
+    pub fn render_with_format<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        scale: Scale<f64>,
+        format: Fourcc,
+        elements: &[impl RenderElement<R>],
+    ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)>
+    where
+        R::Error: Send + Sync + 'static,
+    {
+        let _span = tracy_client::span!("OffscreenBuffer::render_with_format");
 
         let geo = encompassing_geo(scale, elements.iter());
         let elements = Vec::from_iter(elements.iter().map(|ele| {
@@ -115,6 +137,10 @@ impl OffscreenBuffer {
                 reason = &size_string;
 
                 *inner = None;
+            } else if texture.format() != Some(format) {
+                reason = "pixel format changed";
+
+                *inner = None;
             } else if !texture.is_unique_reference() {
                 reason = "not unique";
 
@@ -138,7 +164,7 @@ impl OffscreenBuffer {
             let texture =
                 smithay::backend::renderer::Offscreen::<<R as HasOffscreen>::Offscreen>::create_buffer(
                     renderer,
-                    Fourcc::Abgr8888,
+                    format,
                     src_size,
                 )
                 .context("error creating texture")?;
@@ -201,6 +227,8 @@ impl OffscreenBuffer {
             src_size,
             alpha: 1.,
             kind: Kind::Unspecified,
+            program: OffscreenProgram::Standard,
+            sync: None,
         };
 
         let data = OffscreenData {
@@ -235,6 +263,16 @@ impl OffscreenRenderElement {
         self
     }
 
+    pub fn with_output_hdr(mut self, sdr_white_nits: f32) -> Self {
+        self.program = OffscreenProgram::OutputHdr { sdr_white_nits };
+        self
+    }
+
+    pub fn with_sync(mut self, sync: SyncPoint) -> Self {
+        self.sync = Some(sync);
+        self
+    }
+
     pub fn with_offset(mut self, offset: Point<f64, Logical>) -> Self {
         self.offset = offset;
         self
@@ -266,6 +304,23 @@ impl OffscreenRenderElement {
             return Ok(());
         };
 
+        if let Some(sync) = self.sync.as_ref() {
+            frame.wait(sync)?;
+        }
+
+        let shaders = Shaders::get_from_frame(frame);
+        let program = match self.program {
+            OffscreenProgram::Standard => None,
+            OffscreenProgram::OutputHdr { .. } => shaders.output_hdr.clone(),
+        };
+        let hdr_uniforms = match self.program {
+            OffscreenProgram::Standard => None,
+            OffscreenProgram::OutputHdr { sdr_white_nits } => {
+                Some([Uniform::new("sdr_white_nits", sdr_white_nits)])
+            }
+        };
+        let uniforms = hdr_uniforms.as_ref().map_or(&[][..], |uniforms| &uniforms[..]);
+
         frame.render_texture_from_to(
             texture,
             src,
@@ -274,8 +329,8 @@ impl OffscreenRenderElement {
             opaque_regions,
             Transform::Normal,
             self.alpha,
-            None,
-            &[],
+            program.as_ref(),
+            uniforms,
         )
     }
 }
@@ -378,6 +433,12 @@ impl<'render> RenderElement<TtyRenderer<'render>> for OffscreenRenderElement {
                 warn!("trying to render texture from different renderer");
                 return Ok(());
             }
+        }
+
+        if matches!(self.program, OffscreenProgram::OutputHdr { .. })
+            && matches!(frame, TtyFrame::Vulkan(_))
+        {
+            return Err(TtyRendererError::VulkanUnsupported);
         }
 
         if let (TtyFrame::Vulkan(multi), TtyOffscreen::Vulkan(texture)) =

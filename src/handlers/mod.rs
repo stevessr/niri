@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use niri_config::OutputName;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::drm::DrmNode;
 use smithay::backend::input::TabletToolDescriptor;
@@ -818,6 +819,16 @@ impl GammaControlHandler for State {
     }
 
     fn get_gamma_size(&mut self, output: &Output) -> Option<u32> {
+        if self
+            .niri
+            .output_state
+            .get(output)
+            .is_some_and(|state| state.color_transform_active)
+        {
+            // Gamma LUTs are downstream from the HDR compositor transform and would corrupt PQ.
+            return None;
+        }
+
         match self.backend.tty().get_gamma_size(output) {
             Ok(0) => None, // Setting gamma is not supported.
             Ok(size) => Some(size),
@@ -832,10 +843,93 @@ impl GammaControlHandler for State {
     }
 
     fn set_gamma(&mut self, output: &Output, ramp: Option<Vec<u16>>) -> Option<()> {
-        match self.backend.tty().set_gamma(output, ramp) {
-            Ok(()) => Some(()),
+        let profile = output
+            .user_data()
+            .get::<OutputName>()
+            .and_then(|name| {
+                self.niri
+                    .config
+                    .borrow()
+                    .outputs
+                    .find(name)
+                    .and_then(|config| config.icc_profile.clone())
+            });
+        let hdr_active = self
+            .niri
+            .output_state
+            .get(output)
+            .is_some_and(|state| state.color_transform_active);
+
+        if hdr_active {
+            return match self.backend.tty().set_gamma(output, None) {
+                Ok(()) => {
+                    let state = if profile.is_some() {
+                        niri_ipc::IccProfileState::BypassedHdr
+                    } else {
+                        niri_ipc::IccProfileState::Disabled
+                    };
+                    self.backend
+                        .tty()
+                        .set_icc_profile_runtime_state(output, state, None);
+                    self.niri.ipc_outputs_changed = true;
+                    Some(())
+                }
+                Err(err) => {
+                    warn!(
+                        "error keeping linear gamma for HDR output {}: {err:?}",
+                        output.name()
+                    );
+                    self.backend.tty().set_icc_profile_runtime_state(
+                        output,
+                        niri_ipc::IccProfileState::Error,
+                        Some(format!("{err:#}")),
+                    );
+                    self.niri.ipc_outputs_changed = true;
+                    None
+                }
+            };
+        }
+
+        if let Some(ramp) = ramp {
+            return match self.backend.tty().set_gamma(output, Some(ramp)) {
+                Ok(()) => {
+                    let state = if profile.is_some() {
+                        niri_ipc::IccProfileState::OverriddenGammaControl
+                    } else {
+                        niri_ipc::IccProfileState::Disabled
+                    };
+                    self.backend
+                        .tty()
+                        .set_icc_profile_runtime_state(output, state, None);
+                    self.niri.ipc_outputs_changed = true;
+                    Some(())
+                }
+                Err(err) => {
+                    warn!("error setting gamma for output {}: {err:?}", output.name());
+                    None
+                }
+            };
+        }
+
+        // gamma-control clients temporarily override display calibration. Restore the configured
+        // ICC calibration when a client releases the output instead of always returning to a
+        // linear LUT.
+        match self
+            .backend
+            .tty()
+            .set_icc_profile(output, profile.as_deref())
+        {
+            Ok(()) => {
+                self.niri.ipc_outputs_changed = true;
+                Some(())
+            }
             Err(err) => {
-                warn!("error setting gamma for output {}: {err:?}", output.name());
+                warn!(
+                    "error restoring ICC calibration for output {}: {err:?}",
+                    output.name()
+                );
+                let _ = self.backend.tty().set_gamma(output, None);
+                self.niri.ipc_outputs_changed = true;
                 None
             }
         }
