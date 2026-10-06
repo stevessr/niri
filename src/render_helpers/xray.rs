@@ -104,7 +104,7 @@ impl Xray {
         saturation: f32,
         push: &mut dyn FnMut(XrayElement),
     ) {
-        let program = Shaders::get(ctx.renderer).postprocess_and_clip.clone();
+        let program = Shaders::get(ctx.renderer).and_then(|s| s.postprocess_and_clip.clone());
 
         let zoom = xray_pos.zoom;
         let pos_in_backdrop = xray_pos.pos_in_backdrop.upscale(zoom);
@@ -366,8 +366,10 @@ impl<'render> RenderElement<TtyRenderer<'render>> for XrayElement {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), TtyRendererError<'render>> {
-        let gles_frame = frame.as_gles_frame();
+    ) -> Result<(), TtyRendererError> {
+        let Some(gles_frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
         RenderElement::<GlesRenderer>::draw(
             &self,
             gles_frame,

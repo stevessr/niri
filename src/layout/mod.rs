@@ -45,6 +45,7 @@ use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
 use scrolling::{Column, ColumnWidth};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::utils::RescaleRenderElement;
+use smithay::backend::renderer::element::RenderElement;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::output::{self, Output};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -200,9 +201,9 @@ pub trait LayoutElement {
 
     /// Renders the background effect behind the main surface of the element.
     #[allow(clippy::too_many_arguments)]
-    fn render_background_effect(
+    fn render_background_effect<R: NiriRenderer>(
         &self,
-        _ctx: RenderCtx<GlesRenderer>,
+        _ctx: RenderCtx<R>,
         _geometry: Rectangle<f64, Logical>,
         _scale: f64,
         _clip_to_geometry: bool,
@@ -4838,7 +4839,11 @@ impl<W: LayoutElement> Layout<W> {
         ctx: RenderCtx<R>,
         output: &Output,
         push: &mut dyn FnMut(RescaleRenderElement<TileRenderElement<R>>),
-    ) {
+    )
+    where
+        R::Error: Send + Sync + 'static,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         if self.update_render_elements_time != self.clock.now() {
             error!("clock moved between updating render elements and rendering");
         }

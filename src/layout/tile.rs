@@ -4,7 +4,7 @@ use std::rc::Rc;
 use niri_config::utils::MergeWith as _;
 use niri_config::{Color, CornerRadius, GradientInterpolation};
 use niri_ipc::WindowLayout;
-use smithay::backend::renderer::element::{Element, Kind};
+use smithay::backend::renderer::element::{Element, Kind, RenderElement};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
@@ -1126,7 +1126,9 @@ impl<W: LayoutElement> Tile<W> {
         let mut pushed_resize = false;
         if let Some(resize) = &self.resize_animation {
             if ResizeRenderElement::has_shader(ctx.renderer) {
-                let mut ctx = ctx.as_gles();
+                let Some(mut ctx) = ctx.as_gles() else {
+                    unreachable!("resize shader implies the GLES renderer");
+                };
 
                 if let Some(texture_from) = resize.snapshot.texture(ctx.r(), scale) {
                     let mut window_elements = Vec::new();
@@ -1165,7 +1167,12 @@ impl<W: LayoutElement> Tile<W> {
                         let elem = ResizeRenderElement::new(
                             area,
                             scale,
-                            texture_from.clone(),
+                            (
+                                crate::backend::tty_renderer::TtyOffscreen::Gles(
+                                    texture_from.0.clone(),
+                                ),
+                                texture_from.1,
+                            ),
                             resize.snapshot.size,
                             (texture_current, texture_current_geo),
                             window_size,
@@ -1341,7 +1348,7 @@ impl<W: LayoutElement> Tile<W> {
 
         let surface_anim_scale = animated_window_size / window_size;
         self.window.render_background_effect(
-            ctx.as_gles(),
+            ctx.r(),
             area,
             self.scale,
             clip_to_geometry,
@@ -1359,7 +1366,11 @@ impl<W: LayoutElement> Tile<W> {
         xray_pos: XrayPos,
         focus_ring: bool,
         push: &mut dyn FnMut(TileRenderElement<R>),
-    ) {
+    )
+    where
+        R::Error: Send + Sync + 'static,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Tile::render");
 
         let scale = Scale::from(self.scale);
@@ -1373,7 +1384,6 @@ impl<W: LayoutElement> Tile<W> {
         self.window().set_offscreen_data(None);
 
         if let Some(open) = &self.open_animation {
-            let mut ctx = ctx.as_gles();
             let mut elements = Vec::new();
             self.render_inner(
                 ctx.r(),
@@ -1400,7 +1410,6 @@ impl<W: LayoutElement> Tile<W> {
                 }
             }
         } else if let Some(alpha) = &self.alpha_animation {
-            let mut ctx = ctx.as_gles();
             let mut elements = Vec::new();
             self.render_inner(
                 ctx.r(),

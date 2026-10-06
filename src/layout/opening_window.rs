@@ -7,13 +7,14 @@ use smithay::backend::renderer::element::utils::{
     Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::{Element as _, Kind, RenderElement};
-use smithay::backend::renderer::gles::{GlesRenderer, Uniform};
+use smithay::backend::renderer::gles::Uniform;
 use smithay::backend::renderer::Texture;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
 use crate::animation::Animation;
 use crate::niri_render_elements;
 use crate::render_helpers::offscreen::{OffscreenBuffer, OffscreenData, OffscreenRenderElement};
+use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shader_element::ShaderRenderElement;
 use crate::render_helpers::shaders::{mat3_uniform, ProgramType, Shaders};
 
@@ -46,10 +47,10 @@ impl OpenAnimation {
 
     // We can't depend on view_rect here, because the result of window opening can be snapshot and
     // then rendered elsewhere.
-    pub fn render(
+    pub fn render<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
-        elements: &[impl RenderElement<GlesRenderer>],
+        renderer: &mut R,
+        elements: &[impl RenderElement<R>],
         geo_size: Size<f64, Logical>,
         location: Point<f64, Logical>,
         scale: Scale<f64>,
@@ -63,7 +64,10 @@ impl OpenAnimation {
             .render(renderer, scale, elements)
             .context("error rendering to offscreen buffer")?;
 
-        if Shaders::get(renderer).program(ProgramType::Open).is_some() {
+        if Shaders::get(renderer)
+            .and_then(|s| s.program(ProgramType::Open))
+            .is_some()
+        {
             // OffscreenBuffer renders with Transform::Normal and the scale that we passed, so we
             // can assume that below.
             let offset = elem.offset();

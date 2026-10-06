@@ -471,8 +471,10 @@ impl<'render> RenderElement<TtyRenderer<'render>> for FramebufferEffectElement {
         src: Rectangle<f64, Buffer>,
         dst: Rectangle<i32, Physical>,
         cache: &UserDataMap,
-    ) -> Result<(), TtyRendererError<'render>> {
-        let gles_frame = frame.as_gles_frame();
+    ) -> Result<(), TtyRendererError> {
+        let Some(gles_frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
         RenderElement::<GlesRenderer>::capture_framebuffer(&self, gles_frame, src, dst, cache)?;
         Ok(())
     }
@@ -485,8 +487,10 @@ impl<'render> RenderElement<TtyRenderer<'render>> for FramebufferEffectElement {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), TtyRendererError<'render>> {
-        let gles_frame = frame.as_gles_frame();
+    ) -> Result<(), TtyRendererError> {
+        let Some(gles_frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
         RenderElement::<GlesRenderer>::draw(
             &self,
             gles_frame,

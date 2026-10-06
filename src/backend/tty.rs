@@ -31,8 +31,9 @@ use smithay::backend::egl::{EGLDevice, EGLDisplay};
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::multigpu::gbm::GbmGlesBackend;
-use smithay::backend::renderer::multigpu::{GpuManager, MultiFrame, MultiRenderer};
-use smithay::backend::renderer::{DebugFlags, ImportDma, ImportEgl, RendererSuper};
+use smithay::backend::renderer::multigpu::vulkan::VulkanBackend;
+use smithay::backend::renderer::multigpu::GpuManager;
+use smithay::backend::renderer::{Bind, DebugFlags, ImportDma, ImportEgl};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::{self, UdevBackend, UdevEvent};
@@ -61,6 +62,7 @@ use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 use wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
+use super::tty_renderer::TtyGpuManager;
 use super::{IpcOutputMap, RenderResult};
 use crate::backend::OutputId;
 use crate::color_management::{load_vcgt, parse_edid_hdr_capabilities};
@@ -68,7 +70,7 @@ use crate::frame_clock::FrameClock;
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::offscreen::OffscreenBuffer;
-use crate::render_helpers::renderer::AsGlesRenderer;
+use crate::render_helpers::renderer::{AsGlesRenderer, AsVulkanRenderer};
 use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
 use crate::utils::{
     expand_home, get_monotonic_time, is_laptop_panel, logical_output, PanelOrientation,
@@ -87,7 +89,7 @@ pub struct Tty {
     session: LibSeatSession,
     udev_dispatcher: Dispatcher<'static, UdevBackend, State>,
     libinput: Libinput,
-    gpu_manager: GpuManager<GbmGlesBackend<GlesRenderer, DeviceFd>>,
+    gpu_manager: TtyGpuManager,
     // DRM node corresponding to the primary GPU. May or may not be the same as
     // primary_render_node.
     primary_node: DrmNode,
@@ -107,23 +109,10 @@ pub struct Tty {
     ipc_outputs: Arc<Mutex<IpcOutputMap>>,
 }
 
-pub type TtyRenderer<'render> = MultiRenderer<
-    'render,
-    'render,
-    GbmGlesBackend<GlesRenderer, DeviceFd>,
-    GbmGlesBackend<GlesRenderer, DeviceFd>,
->;
+pub use super::tty_renderer::{TtyFrame, TtyFramebuffer, TtyRenderer};
 
-pub type TtyFrame<'render, 'frame, 'buffer> = MultiFrame<
-    'render,
-    'render,
-    'frame,
-    'buffer,
-    GbmGlesBackend<GlesRenderer, DeviceFd>,
-    GbmGlesBackend<GlesRenderer, DeviceFd>,
->;
-
-pub type TtyRendererError<'render> = <TtyRenderer<'render> as RendererSuper>::Error;
+#[allow(dead_code)]
+pub type TtyRendererError = super::tty_renderer::TtyRendererError;
 
 type GbmDrmCompositor = DrmCompositor<
     GbmAllocator<DeviceFd>,
@@ -534,8 +523,14 @@ impl Tty {
             })
             .unwrap();
 
-        let api = GbmGlesBackend::with_context_priority(ContextPriority::High);
-        let gpu_manager = GpuManager::new(api).context("error creating the GPU manager")?;
+        let gpu_manager = if config.borrow().debug.vulkan_renderer {
+            let api = VulkanBackend::default();
+            TtyGpuManager::Vulkan(GpuManager::new(api).context("error creating the GPU manager")?)
+        } else {
+            let api: GbmGlesBackend<GlesRenderer, DeviceFd> =
+                GbmGlesBackend::with_context_priority(ContextPriority::High);
+            TtyGpuManager::Gles(GpuManager::new(api).context("error creating the GPU manager")?)
+        };
 
         let (primary_node, primary_render_node) = primary_node_from_config(&config.borrow())
             .ok_or(())
@@ -776,6 +771,7 @@ impl Tty {
                                 surface.connector,
                                 surface.compositor.format(),
                                 config.max_bpc,
+                                self.gpu_manager.is_vulkan(),
                                 hdr,
                             ) {
                                 Ok((white, signal_path, restore)) => {
@@ -943,7 +939,6 @@ impl Tty {
                 .flatten()
                 .unwrap_or(node);
             self.gpu_manager
-                .as_mut()
                 .add_node(render_node, gbm.clone())
                 .context("error adding render node to GPU manager")?;
 
@@ -977,21 +972,38 @@ impl Tty {
                 debug!("bound legacy EGL to wl_display");
             }
 
-            let gles_renderer = renderer.as_gles_renderer();
-            resources::init(gles_renderer);
-            shaders::init(gles_renderer);
+            if let Some(gles_renderer) = renderer.as_gles_renderer() {
+                resources::init(gles_renderer);
+                shaders::init(gles_renderer);
 
-            let config = self.config.borrow();
-            if let Some(src) = config.animations.window_resize.custom_shader.as_deref() {
-                shaders::set_custom_resize_program(gles_renderer, Some(src));
+                let config = self.config.borrow();
+                if let Some(src) = config.animations.window_resize.custom_shader.as_deref() {
+                    shaders::set_custom_resize_program(gles_renderer, Some(src));
+                }
+                if let Some(src) = config.animations.window_close.custom_shader.as_deref() {
+                    shaders::set_custom_close_program(gles_renderer, Some(src));
+                }
+                if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
+                    shaders::set_custom_open_program(gles_renderer, Some(src));
+                }
+                drop(config);
+            } else if renderer.as_vulkan_renderer().is_some() {
+                {
+                    let vulkan_renderer = renderer.as_vulkan_renderer().unwrap();
+                    shaders::init_vulkan(vulkan_renderer);
+                }
+
+                let config = self.config.borrow();
+                if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
+                    shaders::set_custom_open_program(&mut renderer, Some(src));
+                }
+                drop(config);
+
+                info!(
+                    "running on the native Vulkan renderer; border, shadow, rounded clipping, \
+                     offscreen fades and window-open shaders enabled"
+                );
             }
-            if let Some(src) = config.animations.window_close.custom_shader.as_deref() {
-                shaders::set_custom_close_program(gles_renderer, Some(src));
-            }
-            if let Some(src) = config.animations.window_open.custom_shader.as_deref() {
-                shaders::set_custom_open_program(gles_renderer, Some(src));
-            }
-            drop(config);
 
             niri.update_shaders();
 
@@ -1351,9 +1363,9 @@ impl Tty {
             }
 
             if was_last {
-                self.gpu_manager.as_mut().remove_node(&render_node);
+                self.gpu_manager.remove_node(&render_node);
                 // Trigger re-enumeration in order to remove the device from gpu_manager.
-                let _ = self.gpu_manager.devices();
+                self.gpu_manager.refresh_devices();
             }
         }
 
@@ -1535,8 +1547,8 @@ impl Tty {
 
         let render_node = device.render_node.unwrap_or(self.primary_render_node);
         let renderer = self.gpu_manager.single_renderer(&render_node)?;
-        let egl_context = renderer.as_ref().egl_context();
-        let render_formats = egl_context.dmabuf_render_formats();
+        let render_formats = Bind::<Dmabuf>::supported_formats(&renderer).unwrap_or_default();
+        let render_formats = &render_formats;
 
         // Filter out the CCS modifiers as they have increased bandwidth, causing some monitor
         // configurations to stop working.
@@ -1671,6 +1683,7 @@ impl Tty {
                     connector.handle(),
                     compositor.format(),
                     config.max_bpc,
+                    self.gpu_manager.is_vulkan(),
                     hdr,
                 ) {
                     Ok((white, signal_path, restore)) => {
@@ -2022,7 +2035,8 @@ impl Tty {
             .gpu_manager
             .single_renderer(&self.primary_render_node)
             .ok()?;
-        Some(f(renderer.as_gles_renderer()))
+        let gles_renderer = renderer.as_gles_renderer()?;
+        Some(f(gles_renderer))
     }
 
     pub fn primary_render_node(&mut self) -> Option<DrmNode> {
@@ -2806,6 +2820,7 @@ impl Tty {
                         surface.connector,
                         surface.compositor.format(),
                         config.max_bpc,
+                        self.gpu_manager.is_vulkan(),
                         hdr,
                     ) {
                         Ok((white, signal_path, restore)) => {
@@ -4192,8 +4207,13 @@ fn enable_hdr10_connector(
     connector: connector::Handle,
     format: Fourcc,
     configured_max_bpc: Option<MaxBpc>,
+    renderer_is_vulkan: bool,
     hdr: &niri_config::output::Hdr,
 ) -> anyhow::Result<(f32, niri_ipc::HdrSignalPath, HdrConnectorRestore)> {
+    ensure!(
+        !renderer_is_vulkan,
+        "experimental HDR output transform currently requires the GLES renderer"
+    );
     ensure!(
         matches!(format, Fourcc::Abgr2101010 | Fourcc::Xbgr2101010),
         "DRM compositor selected {format:?}, but HDR requires a 10-bit BGR2101010 swapchain"

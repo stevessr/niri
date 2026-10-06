@@ -7,23 +7,22 @@ use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement
 use smithay::backend::renderer::element::{
     Element, Id, Kind, RenderElement, RenderElementStates, UnderlyingStorage,
 };
-use smithay::backend::renderer::gles::{
-    GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform,
-};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::utils::{
     CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
 };
 use smithay::backend::renderer::{
-    Bind as _, Color32F, ContextId, Frame as _, Offscreen as _, Renderer, Texture as _,
+    Bind as _, Color32F, ContextId as SmithayContextId, Frame as _, Renderer, Texture as _,
 };
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use super::encompassing_geo;
-use super::renderer::{AsGlesFrame as _, AsGlesRenderer as _};
+use super::renderer::{AsGlesFrame as _, HasOffscreen, NiriRenderer};
 use super::shaders::Shaders;
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
+use crate::backend::tty_renderer::TtyOffscreen;
 
 /// Buffer for offscreen rendering.
 #[derive(Debug)]
@@ -39,9 +38,9 @@ pub struct OffscreenBuffer {
 #[derive(Debug)]
 struct Inner {
     /// The texture with offscreened contents.
-    texture: GlesTexture,
+    texture: TtyOffscreen,
     /// Id of the renderer context that the texture comes from.
-    renderer_context_id: ContextId<GlesTexture>,
+    renderer_context_id: smithay::backend::renderer::ErasedContextId,
     /// Scale of the texture.
     scale: Scale<f64>,
     /// Damage tracker for drawing to the texture.
@@ -53,8 +52,8 @@ struct Inner {
 #[derive(Debug, Clone)]
 pub struct OffscreenRenderElement {
     id: Id,
-    texture: GlesTexture,
-    renderer_context_id: ContextId<GlesTexture>,
+    texture: TtyOffscreen,
+    renderer_context_id: smithay::backend::renderer::ErasedContextId,
     scale: Scale<f64>,
     damage: DamageSnapshot<i32, Buffer>,
     offset: Point<f64, Logical>,
@@ -80,29 +79,27 @@ pub struct OffscreenData {
 }
 
 impl OffscreenBuffer {
-    pub fn render(
+    pub fn render<R: NiriRenderer>(
         &self,
-        renderer: &mut GlesRenderer,
+        renderer: &mut R,
         scale: Scale<f64>,
-        elements: &[impl RenderElement<GlesRenderer>],
-    ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)> {
+        elements: &[impl RenderElement<R>],
+    ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)>
+    where
+        R::Error: Send + Sync + 'static,
+    {
         self.render_with_format(renderer, scale, Fourcc::Abgr8888, elements)
     }
 
-    /// Render a scene into a persistent offscreen texture with an explicit pixel format.
-    ///
-    /// HDR output uses RGBA16F here so extended sRGB values above 1.0 and negative wide-gamut
-    /// components survive composition until the final output transfer function is applied.
-    pub fn render_with_format<R, E>(
+    pub fn render_with_format<R: NiriRenderer>(
         &self,
         renderer: &mut R,
         scale: Scale<f64>,
         format: Fourcc,
-        elements: &[E],
+        elements: &[impl RenderElement<R>],
     ) -> anyhow::Result<(OffscreenRenderElement, SyncPoint, OffscreenData)>
     where
-        R: Renderer + Bind<GlesTexture> + Offscreen<GlesTexture> + super::renderer::AsGlesRenderer,
-        E: RenderElement<R>,
+        R::Error: Send + Sync + 'static,
     {
         let _span = tracy_client::span!("OffscreenBuffer::render_with_format");
 
@@ -148,7 +145,7 @@ impl OffscreenBuffer {
                 reason = "not unique";
 
                 *inner = None;
-            } else if *renderer_context_id != renderer.as_gles_renderer().context_id() {
+            } else if *renderer_context_id != SmithayContextId::erased(&renderer.context_id()) {
                 reason = "renderer id changed";
 
                 *inner = None;
@@ -164,17 +161,21 @@ impl OffscreenBuffer {
             let span = tracy_client::span!("creating offscreen buffer");
             span.emit_text(reason);
 
-            let texture: GlesTexture = renderer
-                .create_buffer(format, src_size)
+            let texture =
+                smithay::backend::renderer::Offscreen::<<R as HasOffscreen>::Offscreen>::create_buffer(
+                    renderer,
+                    format,
+                    src_size,
+                )
                 .context("error creating texture")?;
-            let renderer_context_id = renderer.as_gles_renderer().context_id();
+            let texture = R::wrap_offscreen(texture);
 
             let buffer_size = src_size.to_logical(1, Transform::Normal).to_physical(1);
             let damage = OutputDamageTracker::new(buffer_size, scale, Transform::Normal);
 
             inner.insert(Inner {
                 texture,
-                renderer_context_id,
+                renderer_context_id: SmithayContextId::erased(&renderer.context_id()),
                 scale,
                 damage,
                 outer_damage: DamageBag::default(),
@@ -196,7 +197,9 @@ impl OffscreenBuffer {
         }
 
         let res = {
-            let mut target = renderer.bind(&mut inner.texture)?;
+            let texture = R::unwrap_offscreen(&mut inner.texture)
+                .context("offscreen texture renderer mismatch")?;
+            let mut target = renderer.bind(texture)?;
             inner
                 .damage
                 .render_output(renderer, &mut target, 1, &elements, Color32F::TRANSPARENT)
@@ -247,7 +250,7 @@ impl Default for OffscreenBuffer {
 }
 
 impl OffscreenRenderElement {
-    pub fn texture(&self) -> &GlesTexture {
+    pub fn texture(&self) -> &TtyOffscreen {
         &self.texture
     }
 
@@ -285,6 +288,50 @@ impl OffscreenRenderElement {
         self.damage
             .damage_since(commit)
             .unwrap_or_else(|| DamageSet::from_slice(&[Rectangle::from_size(self.texture.size())]))
+    }
+}
+
+impl OffscreenRenderElement {
+    fn draw_gles(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dest: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        let TtyOffscreen::Gles(texture) = &self.texture else {
+            return Ok(());
+        };
+
+        if let Some(sync) = self.sync.as_ref() {
+            frame.wait(sync)?;
+        }
+
+        let shaders = Shaders::get_from_frame(frame);
+        let program = match self.program {
+            OffscreenProgram::Standard => None,
+            OffscreenProgram::OutputHdr { .. } => shaders.output_hdr.clone(),
+        };
+        let hdr_uniforms = match self.program {
+            OffscreenProgram::Standard => None,
+            OffscreenProgram::OutputHdr { sdr_white_nits } => {
+                Some([Uniform::new("sdr_white_nits", sdr_white_nits)])
+            }
+        };
+        let uniforms = hdr_uniforms.as_ref().map_or(&[][..], |uniforms| &uniforms[..]);
+
+        frame.render_texture_from_to(
+            texture,
+            src,
+            dest,
+            damage,
+            opaque_regions,
+            Transform::Normal,
+            self.alpha,
+            program.as_ref(),
+            uniforms,
+        )
     }
 }
 
@@ -355,39 +402,12 @@ impl RenderElement<GlesRenderer> for OffscreenRenderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        if frame.context_id() != self.renderer_context_id {
+        if SmithayContextId::erased(&frame.context_id()) != self.renderer_context_id {
             warn!("trying to render texture from different renderer");
             return Ok(());
         }
 
-        if let Some(sync) = self.sync.as_ref() {
-            frame.wait(sync)?;
-        }
-
-        let shaders = Shaders::get_from_frame(frame);
-        let program = match self.program {
-            OffscreenProgram::Standard => None,
-            OffscreenProgram::OutputHdr { .. } => shaders.output_hdr.clone(),
-        };
-        let hdr_uniforms = match self.program {
-            OffscreenProgram::Standard => None,
-            OffscreenProgram::OutputHdr { sdr_white_nits } => {
-                Some([Uniform::new("sdr_white_nits", sdr_white_nits)])
-            }
-        };
-        let uniforms = hdr_uniforms.as_ref().map_or(&[][..], |uniforms| &uniforms[..]);
-
-        frame.render_texture_from_to(
-            &self.texture,
-            src,
-            dest,
-            damage,
-            opaque_regions,
-            Transform::Normal,
-            self.alpha,
-            program.as_ref(),
-            uniforms,
-        )
+        self.draw_gles(frame, src, dest, damage, opaque_regions)
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
@@ -406,18 +426,49 @@ impl<'render> RenderElement<TtyRenderer<'render>> for OffscreenRenderElement {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), TtyRendererError<'render>> {
-        let gles_frame = frame.as_gles_frame();
-        RenderElement::<GlesRenderer>::draw(
-            &self,
-            gles_frame,
-            src,
-            dst,
-            damage,
-            opaque_regions,
-            cache,
-        )?;
-        Ok(())
+    ) -> Result<(), TtyRendererError> {
+        {
+            use smithay::backend::renderer::Frame as _;
+            if SmithayContextId::erased(&frame.context_id()) != self.renderer_context_id {
+                warn!("trying to render texture from different renderer");
+                return Ok(());
+            }
+        }
+
+        if matches!(self.program, OffscreenProgram::OutputHdr { .. })
+            && matches!(frame, TtyFrame::Vulkan(_))
+        {
+            return Err(TtyRendererError::VulkanUnsupported);
+        }
+
+        if let (TtyFrame::Vulkan(multi), TtyOffscreen::Vulkan(texture)) =
+            (&mut *frame, &self.texture)
+        {
+            let vulkan_frame: &mut smithay::backend::renderer::vulkan::VulkanFrame<'_, '_> =
+                multi.as_mut();
+            return vulkan_frame
+                .render_texture_from_to(
+                    texture,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    Transform::Normal,
+                    self.alpha,
+                )
+                .map_err(|err| {
+                    TtyRendererError::Vulkan(
+                        smithay::backend::renderer::multigpu::Error::Render(err),
+                    )
+                });
+        }
+
+        let Some(gles_frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
+        let _ = cache;
+        self.draw_gles(gles_frame, src, dst, damage, opaque_regions)
+            .map_err(Into::into)
     }
 
     fn underlying_storage(
