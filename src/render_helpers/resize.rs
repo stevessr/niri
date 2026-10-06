@@ -4,7 +4,7 @@ use std::rc::Rc;
 use glam::{Mat3, Vec2};
 use niri_config::CornerRadius;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, Uniform};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, Uniform};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::backend::renderer::Texture as _;
 use smithay::gpu_span_location;
@@ -15,6 +15,7 @@ use super::renderer::{AsGlesFrame, NiriRenderer};
 use super::shader_element::ShaderRenderElement;
 use super::shaders::{mat3_uniform, ProgramType, Shaders};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
+use crate::backend::tty_renderer::TtyOffscreen;
 
 #[derive(Debug)]
 pub struct ResizeRenderElement(ShaderRenderElement);
@@ -24,9 +25,9 @@ impl ResizeRenderElement {
     pub fn new(
         area: Rectangle<f64, Logical>,
         scale: Scale<f64>,
-        texture_prev: (GlesTexture, Rectangle<i32, Physical>),
+        texture_prev: (TtyOffscreen, Rectangle<i32, Physical>),
         size_prev: Size<f64, Logical>,
-        texture_next: (GlesTexture, Rectangle<i32, Physical>),
+        texture_next: (TtyOffscreen, Rectangle<i32, Physical>),
         size_next: Size<f64, Logical>,
         progress: f32,
         clamped_progress: f32,
@@ -117,7 +118,7 @@ impl ResizeRenderElement {
 
     pub fn has_shader(renderer: &mut impl NiriRenderer) -> bool {
         Shaders::get(renderer)
-            .program(ProgramType::Resize)
+            .and_then(|s| s.program(ProgramType::Resize))
             .is_some()
     }
 }
@@ -202,8 +203,10 @@ impl<'render> RenderElement<TtyRenderer<'render>> for ResizeRenderElement {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
-    ) -> Result<(), TtyRendererError<'render>> {
-        let frame = frame.as_gles_frame();
+    ) -> Result<(), TtyRendererError> {
+        let Some(frame) = frame.as_gles_frame() else {
+            return Ok(());
+        };
         RenderElement::<GlesRenderer>::draw(self, frame, src, dst, damage, opaque_regions, cache)?;
         Ok(())
     }

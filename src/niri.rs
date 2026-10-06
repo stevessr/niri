@@ -4555,7 +4555,12 @@ impl Niri {
         ctx: RenderCtx<R>,
         output: &Output,
         include_pointer: bool,
-    ) -> Vec<OutputRenderElements<R>> {
+    ) -> Vec<OutputRenderElements<R>>
+    where
+        R::Error: Send + Sync + 'static,
+        WindowMruUiRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         let mut elements = Vec::new();
         self.render(ctx, output, include_pointer, &mut |elem| {
             elements.push(elem)
@@ -4569,7 +4574,12 @@ impl Niri {
         output: &Output,
         include_pointer: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
-    ) {
+    )
+    where
+        R::Error: Send + Sync + 'static,
+        WindowMruUiRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         let _span = tracy_client::span!("Niri::render");
 
         if ctx.target == RenderTarget::Output {
@@ -4581,7 +4591,9 @@ impl Niri {
             }
         }
 
-        self.fill_xray_elements(ctx.as_gles(), output);
+        if let Some(gles_ctx) = ctx.as_gles() {
+            self.fill_xray_elements(gles_ctx, output);
+        }
 
         // Reborrow to shorten lifetime to be able to put in xray.
         let mut ctx = ctx.r();
@@ -4599,7 +4611,12 @@ impl Niri {
         output: &Output,
         include_pointer: bool,
         push: &mut dyn FnMut(OutputRenderElements<R>),
-    ) {
+    )
+    where
+        R::Error: Send + Sync + 'static,
+        WindowMruUiRenderElement<R>: RenderElement<R>,
+        TileRenderElement<R>: RenderElement<R>,
+    {
         let state = self.output_state.get(output).unwrap();
         let output_scale = Scale::from(output.current_scale().fractional_scale());
 

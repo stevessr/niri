@@ -5,6 +5,7 @@ use smithay::backend::renderer::{
 };
 
 use crate::backend::tty::{TtyFrame, TtyRenderer};
+use crate::backend::tty_renderer::TtyOffscreen;
 
 /// Trait with our main renderer requirements to save on the typing.
 pub trait NiriRenderer:
@@ -15,6 +16,10 @@ pub trait NiriRenderer:
     + Offscreen<GlesTexture>
     + Renderer<TextureId = Self::NiriTextureId, Error = Self::NiriError>
     + AsGlesRenderer
+    + AsVulkanRenderer
+    + HasOffscreen
+    + Offscreen<<Self as HasOffscreen>::Offscreen>
+    + Bind<<Self as HasOffscreen>::Offscreen>
 {
     // Associated types to work around the instability of associated type bounds.
     type NiriTextureId: Texture + Clone + Send + 'static;
@@ -27,7 +32,16 @@ pub trait NiriRenderer:
 
 impl<R> NiriRenderer for R
 where
-    R: ImportAll + ImportMem + ExportMem + Bind<Dmabuf> + Offscreen<GlesTexture> + AsGlesRenderer,
+    R: ImportAll
+        + ImportMem
+        + ExportMem
+        + Bind<Dmabuf>
+        + Offscreen<GlesTexture>
+        + AsGlesRenderer
+        + AsVulkanRenderer
+        + HasOffscreen
+        + Offscreen<<R as HasOffscreen>::Offscreen>
+        + Bind<<R as HasOffscreen>::Offscreen>,
     R::TextureId: Texture + Clone + Send + 'static,
     R::Error:
         std::error::Error + Send + Sync + From<<GlesRenderer as RendererSuper>::Error> + 'static,
@@ -36,39 +50,109 @@ where
     type NiriError = R::Error;
 }
 
-/// Trait for getting the underlying `GlesRenderer`.
+/// Trait for getting the underlying `GlesRenderer`, if any.
+///
+/// Returns `None` for the Vulkan renderer; GLES-specific functionality (custom shaders,
+/// offscreen effects) degrades gracefully in that case.
 pub trait AsGlesRenderer {
-    fn as_gles_renderer(&mut self) -> &mut GlesRenderer;
+    fn as_gles_renderer(&mut self) -> Option<&mut GlesRenderer>;
 }
 
 impl AsGlesRenderer for GlesRenderer {
-    fn as_gles_renderer(&mut self) -> &mut GlesRenderer {
-        self
+    fn as_gles_renderer(&mut self) -> Option<&mut GlesRenderer> {
+        Some(self)
     }
 }
 
 impl AsGlesRenderer for TtyRenderer<'_> {
-    fn as_gles_renderer(&mut self) -> &mut GlesRenderer {
-        self.as_mut()
+    fn as_gles_renderer(&mut self) -> Option<&mut GlesRenderer> {
+        match self {
+            TtyRenderer::Gles(renderer) => Some(renderer.as_mut()),
+            TtyRenderer::Vulkan(_) => None,
+        }
     }
 }
 
-/// Trait for getting the underlying `GlesFrame`.
+/// Trait for getting the underlying native Vulkan renderer, if any.
+pub trait AsVulkanRenderer {
+    fn as_vulkan_renderer(
+        &mut self,
+    ) -> Option<&mut smithay::backend::renderer::vulkan::VulkanRenderer>;
+}
+
+impl AsVulkanRenderer for GlesRenderer {
+    fn as_vulkan_renderer(
+        &mut self,
+    ) -> Option<&mut smithay::backend::renderer::vulkan::VulkanRenderer> {
+        None
+    }
+}
+
+impl AsVulkanRenderer for TtyRenderer<'_> {
+    fn as_vulkan_renderer(
+        &mut self,
+    ) -> Option<&mut smithay::backend::renderer::vulkan::VulkanRenderer> {
+        match self {
+            TtyRenderer::Gles(_) => None,
+            TtyRenderer::Vulkan(renderer) => Some(renderer.as_mut()),
+        }
+    }
+}
+
+/// The offscreen render target texture type of a renderer.
+pub trait HasOffscreen: Renderer {
+    type Offscreen: Texture + Clone + Send + 'static;
+
+    fn wrap_offscreen(texture: Self::Offscreen) -> TtyOffscreen;
+    fn unwrap_offscreen(texture: &mut TtyOffscreen) -> Option<&mut Self::Offscreen>;
+}
+
+impl HasOffscreen for GlesRenderer {
+    type Offscreen = GlesTexture;
+
+    fn wrap_offscreen(texture: GlesTexture) -> TtyOffscreen {
+        TtyOffscreen::Gles(texture)
+    }
+
+    fn unwrap_offscreen(texture: &mut TtyOffscreen) -> Option<&mut GlesTexture> {
+        match texture {
+            TtyOffscreen::Gles(texture) => Some(texture),
+            TtyOffscreen::Vulkan(_) => None,
+        }
+    }
+}
+
+impl HasOffscreen for TtyRenderer<'_> {
+    type Offscreen = TtyOffscreen;
+
+    fn wrap_offscreen(texture: TtyOffscreen) -> TtyOffscreen {
+        texture
+    }
+
+    fn unwrap_offscreen(texture: &mut TtyOffscreen) -> Option<&mut TtyOffscreen> {
+        Some(texture)
+    }
+}
+
+/// Trait for getting the underlying `GlesFrame`, if any.
 pub trait AsGlesFrame<'frame, 'buffer>
 where
     Self: 'frame,
 {
-    fn as_gles_frame(&mut self) -> &mut GlesFrame<'frame, 'buffer>;
+    fn as_gles_frame(&mut self) -> Option<&mut GlesFrame<'frame, 'buffer>>;
 }
 
 impl<'frame, 'buffer> AsGlesFrame<'frame, 'buffer> for GlesFrame<'frame, 'buffer> {
-    fn as_gles_frame(&mut self) -> &mut GlesFrame<'frame, 'buffer> {
-        self
+    fn as_gles_frame(&mut self) -> Option<&mut GlesFrame<'frame, 'buffer>> {
+        Some(self)
     }
 }
 
 impl<'frame, 'buffer> AsGlesFrame<'frame, 'buffer> for TtyFrame<'_, 'frame, 'buffer> {
-    fn as_gles_frame(&mut self) -> &mut GlesFrame<'frame, 'buffer> {
-        self.as_mut()
+    fn as_gles_frame(&mut self) -> Option<&mut GlesFrame<'frame, 'buffer>> {
+        match self {
+            TtyFrame::Gles(frame) => Some(frame.as_mut()),
+            TtyFrame::Vulkan(_) => None,
+        }
     }
 }

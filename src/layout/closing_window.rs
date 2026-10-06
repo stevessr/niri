@@ -224,7 +224,7 @@ impl ClosingWindow {
         let clamped_progress = anim.clamped_value().clamp(0., 1.);
 
         if Shaders::get(ctx.renderer)
-            .program(ProgramType::Close)
+            .and_then(|s| s.program(ProgramType::Close))
             .is_some()
         {
             let area_loc = Vec2::new(view_rect.loc.x as f32, view_rect.loc.y as f32);
@@ -264,7 +264,10 @@ impl ClosingWindow {
                     Uniform::new("niri_clamped_progress", clamped_progress as f32),
                     Uniform::new("niri_random_seed", self.random_seed),
                 ]),
-                HashMap::from([(String::from("niri_tex"), buffer.texture().clone())]),
+                HashMap::from([(
+                    String::from("niri_tex"),
+                    crate::backend::tty_renderer::TtyOffscreen::Gles(buffer.texture().clone()),
+                )]),
                 Kind::Unspecified,
             )
             .with_location(Point::from((0., 0.)))

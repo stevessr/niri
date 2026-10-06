@@ -27,14 +27,14 @@ tracy-client = { version = "0.18.5", default-features = false }
 
 [workspace.dependencies.smithay]
 # version = "0.4.1"
-git = "https://github.com/Smithay/smithay.git"
-rev = "118e34ffc9b99854a2230c4805e1f37dc9029edb"
+git = "https://github.com/stevessr/smithay.git"
+rev = "7154010970907ab554a0bcafa75a4d0fe819d9e1"
 default-features = false
 
 [workspace.dependencies.smithay-drm-extras]
 # version = "0.1.0"
-git = "https://github.com/Smithay/smithay.git"
-rev = "118e34ffc9b99854a2230c4805e1f37dc9029edb"
+git = "https://github.com/stevessr/smithay.git"
+rev = "7154010970907ab554a0bcafa75a4d0fe819d9e1"
 # path = "../smithay/smithay-drm-extras"
 
 [package]
@@ -111,6 +111,7 @@ features = [
     "renderer_gl",
     "renderer_pixman",
     "renderer_multi",
+    "renderer_vulkan",
     "use_system_lib",
     "wayland_frontend",
 ]
