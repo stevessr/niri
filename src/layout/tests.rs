@@ -4048,3 +4048,60 @@ proptest! {
         check_ops_with_options(options, ops);
     }
 }
+
+#[test]
+fn dragged_window_overlaps_adjacent_output() {
+    let pos = Point::from((80., 10.));
+    let tile_size = Size::from((70., 30.));
+    let size = Size::from((100., 100.));
+
+    // The window straddles the edge between two horizontally adjacent outputs.
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((0., 0.)),
+        size,
+    ));
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-100., 0.)),
+        size,
+    ));
+
+    // The remote third monitor is not intersected.
+    assert!(!interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-200., 0.)),
+        size,
+    ));
+}
+
+#[test]
+fn dragged_window_respects_vertical_output_boundaries() {
+    let pos = Point::from((30., 90.));
+    let tile_size = Size::from((80., 40.));
+    let size = Size::from((100., 100.));
+
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((0., -100.)),
+        size,
+    ));
+    // Touching, without crossing, must not paint the other output.
+    assert!(!interactive_move_overlaps_output(
+        Point::from((30., 60.)),
+        Size::from((50., 40.)),
+        Point::from((0., -100.)),
+        size,
+    ));
+    // Outputs to the left don't receive the drag preview.
+    assert!(!interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-200., 0.)),
+        size,
+    ));
+}
