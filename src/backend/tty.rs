@@ -1546,6 +1546,12 @@ impl Tty {
         }
 
         let render_node = device.render_node.unwrap_or(self.primary_render_node);
+        if device.render_node != Some(self.primary_render_node) {
+            info!(
+                "output {connector_name:?}: cross-device presentation from compositor GPU {} to DRM device {} (render node {:?})",
+                self.primary_render_node, node, device.render_node
+            );
+        }
         let renderer = self.gpu_manager.single_renderer(&render_node)?;
         let render_formats = Bind::<Dmabuf>::supported_formats(&renderer).unwrap_or_default();
         let render_formats = &render_formats;
