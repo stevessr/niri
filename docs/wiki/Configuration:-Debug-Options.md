@@ -134,6 +134,16 @@ debug {
 }
 ```
 
+#### Multi-GPU rendering
+
+Niri uses a primary GPU to compose its Wayland scene. When an output is driven by
+another DRM device, Smithay's multi-GPU renderer transfers the result to the
+scanout device; it does not automatically move application rendering or GPU
+compute workloads to that device. Use `render-drm-device` above to select the
+compositor's rendering GPU. Native cross-GPU buffer import and scanout depend
+on the drivers and supported DMA-BUF formats/modifiers. The compositor logs
+which outputs need cross-device presentation.
+
 ### `ignore-drm-device`
 
 <sup>Since: 25.11</sup>
