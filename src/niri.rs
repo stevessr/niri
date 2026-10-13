@@ -4630,6 +4630,22 @@ impl Niri {
         }
     }
 
+    /// Translation from the dragged window's owning output to the output
+    /// currently being painted. Output positions are kept in Smithay's global
+    /// space rather than in the per-output workspace layout.
+    fn interactive_move_output_offset(&self, output: &Output) -> Point<f64, Logical> {
+        let Some(source) = self.layout.interactive_move_render_output() else {
+            return Point::default();
+        };
+        let Some(source_geometry) = self.global_space.output_geometry(source) else {
+            return Point::default();
+        };
+        let Some(target_geometry) = self.global_space.output_geometry(output) else {
+            return Point::default();
+        };
+        (source_geometry.loc - target_geometry.loc).to_f64()
+    }
+
     pub fn render_to_vec<R: NiriRenderer>(
         &self,
         ctx: RenderCtx<R>,
@@ -4925,8 +4941,12 @@ impl Niri {
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
         if mon.render_above_top_layer() {
-            self.layout
-                .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
+            self.layout.render_interactive_move_for_output(
+                ctx.r(),
+                output,
+                self.interactive_move_output_offset(output),
+                &mut |elem| push(elem.into()),
+            );
 
             mon.render_insert_hint_between_workspaces(ctx.renderer, &mut |elem| push(elem.into()));
 
@@ -4948,8 +4968,12 @@ impl Niri {
             push_popups_from_layer!(Layer::Top);
             push_normal_from_layer!(Layer::Top);
 
-            self.layout
-                .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
+            self.layout.render_interactive_move_for_output(
+                ctx.r(),
+                output,
+                self.interactive_move_output_offset(output),
+                &mut |elem| push(elem.into()),
+            );
 
             mon.render_insert_hint_between_workspaces(ctx.renderer, &mut |elem| push(elem.into()));
 
