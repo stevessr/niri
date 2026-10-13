@@ -4891,19 +4891,6 @@ impl<W: LayoutElement> Layout<W> {
             });
     }
 
-/// Test visibility using logical coordinates on the target output. In particular,
-/// touching an output edge must not cause us to render an extra copy of the tile.
-fn interactive_move_overlaps_output(
-    source_pos: Point<f64, Logical>,
-    tile_size: Size<f64, Logical>,
-    source_to_target: Point<f64, Logical>,
-    target_size: Size<f64, Logical>,
-) -> bool {
-    Rectangle::new(source_pos + source_to_target, tile_size)
-        .intersection(Rectangle::from_size(target_size))
-        .is_some()
-}
-
     pub fn refresh(&mut self, is_active: bool) {
         let _span = tracy_client::span!("Layout::refresh");
 
@@ -5057,6 +5044,19 @@ fn interactive_move_overlaps_output(
     pub fn is_overview_open(&self) -> bool {
         self.overview_open
     }
+}
+
+/// Test visibility using logical coordinates on the target output. In particular,
+/// touching an output edge must not cause us to render an extra copy of the tile.
+fn interactive_move_overlaps_output(
+    source_pos: Point<f64, Logical>,
+    tile_size: Size<f64, Logical>,
+    source_to_target: Point<f64, Logical>,
+    target_size: Size<f64, Logical>,
+) -> bool {
+    Rectangle::new(source_pos + source_to_target, tile_size)
+        .intersection(Rectangle::from_size(target_size))
+        .is_some()
 }
 
 impl<W: LayoutElement> Default for MonitorSet<W> {
