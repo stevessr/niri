@@ -14,3 +14,14 @@ Use `switch-focus-between-floating-and-tiling` to switch the focus between the t
 When focused on the floating layout, binds (like `focus-column-right`) will operate on the floating window.
 
 You can precisely position a floating window with a command like `niri msg action move-floating-window -x 100 -y 200`.
+
+### Dragging between monitors
+
+While a window is **actively being dragged**, the portions overlapping adjacent
+outputs are drawn on both monitors. This includes monitors driven by different
+GPUs, using niri's existing multi-GPU renderer and DRM buffer transfer path.
+
+This is a drag-time visual effect, not support for permanently spanning monitors:
+a window still belongs to a single workspace/output when the drag ends.
+Different output scales, transforms, and GPU combinations should be tested on
+the actual hardware before relying on the experimental behavior.
