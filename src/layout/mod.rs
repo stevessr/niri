@@ -4376,6 +4376,15 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Output that owns the interactively dragged tile. Other outputs can also display
+    /// the visible part of the tile while it crosses their boundaries.
+    pub fn interactive_move_render_output(&self) -> Option<&Output> {
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(&move_.output),
+            _ => None,
+        }
+    }
+
     pub fn interactive_move_is_moving_above_output(&self, output: &Output) -> bool {
         let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
             return false;
@@ -4838,6 +4847,7 @@ impl<W: LayoutElement> Layout<W> {
         &self,
         ctx: RenderCtx<R>,
         output: &Output,
+        source_to_target: Point<f64, Logical>,
         push: &mut dyn FnMut(RescaleRenderElement<TileRenderElement<R>>),
     )
     where
@@ -4852,25 +4862,47 @@ impl<W: LayoutElement> Layout<W> {
             return;
         };
 
-        if &move_.output != output {
+        let zoom = self.overview_zoom();
+        let source_pos = move_.tile_render_location(zoom);
+        if !interactive_move_overlaps_output(
+            source_pos,
+            move_.tile.tile_size().upscale(zoom),
+            source_to_target,
+            output_size(output),
+        ) {
             return;
         }
 
-        let scale = Scale::from(move_.output.current_scale().fractional_scale());
-        let zoom = self.overview_zoom();
-        let pos_in_backdrop = move_.tile_render_location(zoom);
-        let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
+        // Position the dragged tile in the destination output's logical space.
+        // The renderer converts elements into this output's physical scale; the
+        // TTY backend then handles any cross-GPU copy required for presentation.
+        let target_pos = source_pos + source_to_target;
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let xray_pos = XrayPos::new(target_pos, zoom);
 
         move_
             .tile
-            .render(ctx, pos_in_backdrop, xray_pos, true, &mut |elem| {
+            .render(ctx, source_pos, xray_pos, true, &mut |elem| {
                 push(RescaleRenderElement::from_element(
                     elem,
-                    pos_in_backdrop.to_physical_precise_round(scale),
+                    target_pos.to_physical_precise_round(scale),
                     zoom,
                 ));
             });
     }
+
+/// Test visibility using logical coordinates on the target output. In particular,
+/// touching an output edge must not cause us to render an extra copy of the tile.
+fn interactive_move_overlaps_output(
+    source_pos: Point<f64, Logical>,
+    tile_size: Size<f64, Logical>,
+    source_to_target: Point<f64, Logical>,
+    target_size: Size<f64, Logical>,
+) -> bool {
+    Rectangle::new(source_pos + source_to_target, tile_size)
+        .intersection(Rectangle::from_size(target_size))
+        .is_some()
+}
 
     pub fn refresh(&mut self, is_active: bool) {
         let _span = tracy_client::span!("Layout::refresh");
