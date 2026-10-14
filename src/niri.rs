@@ -247,6 +247,11 @@ pub struct Niri {
     // according to their global position.
     pub global_space: Space<Window>,
 
+    /// Extra outputs intersected by the interactively dragged window, beyond
+    /// its owning output. Keep the Window around to send matching leave events
+    /// if the drag finishes, the output disappears, or the window is unmapped.
+    interactive_move_extra_outputs: HashMap<Output, (MappedId, Window)>,
+
     /// Mapped outputs, sorted by their name and position.
     pub sorted_outputs: Vec<Output>,
 
@@ -864,6 +869,7 @@ impl State {
         self.niri.cursor_manager.check_cursor_image_surface_alive();
         self.niri.refresh_pointer_outputs();
         self.niri.global_space.refresh();
+        self.niri.refresh_interactive_move_outputs();
         self.niri.refresh_idle_inhibit();
         self.refresh_pointer_contents();
         foreign_toplevel::refresh(self);
@@ -2852,6 +2858,7 @@ impl Niri {
 
             layout,
             global_space: Space::default(),
+            interactive_move_extra_outputs: HashMap::new(),
             sorted_outputs: Vec::default(),
             output_state: HashMap::new(),
             unmapped_windows: HashMap::new(),
@@ -3669,8 +3676,11 @@ impl Niri {
         }
 
         if let Some((window, _loc)) = self
-            .layout
-            .interactive_moved_window_under(output, pos_within_output)
+            .interactive_move_output_offset(output)
+            .and_then(|offset| {
+                self.layout
+                    .interactive_moved_window_under(output, pos_within_output, offset)
+            })
         {
             return Some(window);
         }
@@ -3873,8 +3883,11 @@ impl Niri {
         };
 
         let interactive_moved_window_under = || {
-            self.layout
-                .interactive_moved_window_under(output, pos_within_output)
+            self.interactive_move_output_offset(output)
+                .and_then(|offset| {
+                    self.layout
+                        .interactive_moved_window_under(output, pos_within_output, offset)
+                })
                 .map(mapped_hit_data)
         };
         let window_under = || {
@@ -4137,6 +4150,91 @@ impl Niri {
 
         let state = self.output_state.get(output)?;
         state.lock_surface.as_ref().map(|s| s.wl_surface()).cloned()
+    }
+
+    /// Keep Wayland output membership in sync with the portions of a window
+    /// shown on other monitors during an interactive move.
+    ///
+    /// The layout continues to own enter/leave for the output underneath the
+    /// pointer. Only secondary overlapping outputs are managed here.
+    pub fn refresh_interactive_move_outputs(&mut self) {
+        let moving_window = self
+            .layout
+            .interactive_move_window()
+            .map(|mapped| (mapped.id(), mapped.window.clone()));
+        let owner = self.layout.interactive_move_render_output().cloned();
+
+        let targets: HashSet<Output> = if moving_window.is_some() {
+            self.global_space
+                .outputs()
+                .filter(|output| {
+                    owner.as_ref() != Some(*output)
+                        && self
+                            .interactive_move_output_offset(output)
+                            .is_some_and(|offset| {
+                                self.layout.interactive_move_overlaps_output(output, offset)
+                            })
+                })
+                .cloned()
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
+        // Use the highest preferred scale among overlapping displays, as
+        // required for a single Wayland surface that spans mixed-DPI outputs.
+        // The layout still owns the tile geometry; this is a client hint.
+        let preferred_output = owner
+            .iter()
+            .chain(targets.iter())
+            .max_by(|a, b| {
+                a.current_scale()
+                    .fractional_scale()
+                    .total_cmp(&b.current_scale().fractional_scale())
+            })
+            .cloned();
+        if let Some(preferred_output) = preferred_output {
+            if let Some(mapped) = self.layout.interactive_move_window_mut() {
+                mapped.set_preferred_scale_transform(
+                    preferred_output.current_scale(),
+                    preferred_output.current_transform(),
+                );
+            }
+        }
+
+        // Drop old memberships first. If an extra output becomes the owner,
+        // layout has already taken responsibility for its enter/leave events.
+        for (output, (id, window)) in mem::take(&mut self.interactive_move_extra_outputs) {
+            if owner.as_ref() == Some(&output) {
+                continue;
+            }
+
+            if moving_window.as_ref().is_some_and(|(current_id, _)| *current_id == id)
+                && targets.contains(&output)
+            {
+                self.interactive_move_extra_outputs
+                    .insert(output, (id, window));
+            } else {
+                window.output_leave(&output);
+            }
+        }
+
+        if let Some((id, window)) = moving_window {
+            for output in targets {
+                if self.interactive_move_extra_outputs.contains_key(&output) {
+                    continue;
+                }
+
+                // The full window is considered entered while any portion
+                // intersects this output, matching the LayoutElement behavior.
+                window.output_enter(
+                    &output,
+                    Rectangle::from_size(Size::from((i32::MAX, i32::MAX))),
+                );
+                self.interactive_move_extra_outputs
+                    .insert(output, (id, window.clone()));
+            }
+        }
     }
 
     /// Schedules an immediate redraw on all outputs if one is not already scheduled.
@@ -4630,6 +4728,58 @@ impl Niri {
         }
     }
 
+    /// Translation from the dragged window's owning output to the output
+    /// currently being painted. Output positions are kept in Smithay's global
+    /// space rather than in the per-output workspace layout.
+    fn interactive_move_output_offset(&self, output: &Output) -> Option<Point<f64, Logical>> {
+        let source = self.layout.interactive_move_render_output()?;
+        let source_geometry = self.global_space.output_geometry(source)?;
+        let target_geometry = self.global_space.output_geometry(output)?;
+        Some((source_geometry.loc - target_geometry.loc).to_f64())
+    }
+
+    /// A dragged window can also be visible on an output which does not own
+    /// its workspace. Keep this query consistent across damage, frame callbacks
+    /// and presentation feedback; otherwise clients on the other monitor stall.
+    fn interactive_move_window_on_secondary_output(&self, output: &Output) -> Option<&Mapped> {
+        if self.layout.interactive_move_render_output()? == output {
+            return None;
+        }
+        let offset = self.interactive_move_output_offset(output)?;
+        self.layout
+            .interactive_move_overlaps_output(output, offset)
+            .then(|| self.layout.interactive_move_window())
+            .flatten()
+    }
+
+    /// Direct scanout is unsafe for a dragged tile that needs to be composed
+    /// into more than one output. Such frames must go through the compositor
+    /// before being presented by each DRM device.
+    pub fn cross_output_drag_requires_compositing(&self, output: &Output) -> bool {
+        let Some(_) = self.layout.interactive_move_render_output() else {
+            return false;
+        };
+
+        let visible_on_target = self
+            .interactive_move_output_offset(output)
+            .is_some_and(|offset| self.layout.interactive_move_overlaps_output(output, offset));
+        if !visible_on_target {
+            return false;
+        }
+
+        self.global_space
+            .outputs()
+            .filter(|candidate| {
+                self.interactive_move_output_offset(candidate)
+                    .is_some_and(|offset| {
+                        self.layout.interactive_move_overlaps_output(candidate, offset)
+                    })
+            })
+            .take(2)
+            .count()
+            > 1
+    }
+
     pub fn render_to_vec<R: NiriRenderer>(
         &self,
         ctx: RenderCtx<R>,
@@ -4854,7 +5004,9 @@ impl Niri {
 
         // Don't draw the focus ring on the workspaces while interactively moving above those
         // workspaces, since the interactively-moved window already has a focus ring.
-        let focus_ring = !self.layout.interactive_move_is_moving_above_output(output);
+        let focus_ring = !self
+            .interactive_move_output_offset(output)
+            .is_some_and(|offset| self.layout.interactive_move_overlaps_output(output, offset));
 
         // Get monitor elements.
         let mon = self.layout.monitor_for_output(output).unwrap();
@@ -4925,8 +5077,14 @@ impl Niri {
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
         if mon.render_above_top_layer() {
-            self.layout
-                .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
+            if let Some(offset) = self.interactive_move_output_offset(output) {
+                self.layout.render_interactive_move_for_output(
+                    ctx.r(),
+                    output,
+                    offset,
+                    &mut |elem| push(elem.into()),
+                );
+            }
 
             mon.render_insert_hint_between_workspaces(ctx.renderer, &mut |elem| push(elem.into()));
 
@@ -4948,8 +5106,14 @@ impl Niri {
             push_popups_from_layer!(Layer::Top);
             push_normal_from_layer!(Layer::Top);
 
-            self.layout
-                .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
+            if let Some(offset) = self.interactive_move_output_offset(output) {
+                self.layout.render_interactive_move_for_output(
+                    ctx.r(),
+                    output,
+                    offset,
+                    &mut |elem| push(elem.into()),
+                );
+            }
 
             mon.render_insert_hint_between_workspaces(ctx.renderer, &mut |elem| push(elem.into()));
 
@@ -5286,7 +5450,11 @@ impl Niri {
             return;
         }
 
-        let current = self.layout.windows_for_output(output).any(|mapped| {
+        let current = self
+            .layout
+            .windows_for_output(output)
+            .chain(self.interactive_move_window_on_secondary_output(output))
+            .any(|mapped| {
             mapped.rules().variable_refresh_rate == Some(true) && {
                 let mut visible = false;
                 mapped.window.with_surfaces(|surface, states| {
@@ -5352,13 +5520,14 @@ impl Niri {
             );
         }
 
-        // We're only updating the current output's windows and layer surfaces. This should be fine
-        // as in niri they can only be rendered on a single output at a time.
-        //
-        // The reason to do this at all is that it keeps track of whether the surface is visible or
-        // not in a unified way with the pointer surfaces, which makes the logic elsewhere simpler.
-
-        for mapped in self.layout.windows_for_output(output) {
+        // Include the moving window on secondary displays when it overlaps.
+        // Its primary presentation output may differ from the workspace owner.
+        // Other regular windows remain local to their workspace output.
+        for mapped in self
+            .layout
+            .windows_for_output(output)
+            .chain(self.interactive_move_window_on_secondary_output(output))
+        {
             let win = &mapped.window;
             let offscreen_data = mapped.offscreen_data();
             let offscreen_data = offscreen_data.as_ref();
@@ -5516,6 +5685,23 @@ impl Niri {
             );
         }
 
+        // The cross-output moving window should use feedback from the
+        // *primary* presentation output, instead of oscillating between GPUs.
+        if let Some(mapped) = self.interactive_move_window_on_secondary_output(output) {
+            mapped.window.send_dmabuf_feedback(
+                output,
+                surface_primary_scanout_output,
+                |surface, _| {
+                    select_dmabuf_feedback(
+                        surface,
+                        render_element_states,
+                        &feedback.render,
+                        &feedback.scanout,
+                    )
+                },
+            );
+        }
+
         for surface in layer_map_for_output(output).layers() {
             surface.send_dmabuf_feedback(
                 output,
@@ -5621,6 +5807,11 @@ impl Niri {
 
         let frame_callback_time = get_monotonic_time();
 
+        // Compute visibility before mutably borrowing the layout for frame dispatch.
+        let moving_on_secondary = self
+            .interactive_move_window_on_secondary_output(output)
+            .is_some();
+
         for mapped in self.layout.windows_for_output_mut(output) {
             mapped.send_frame(
                 output,
@@ -5628,6 +5819,17 @@ impl Niri {
                 FRAME_CALLBACK_THROTTLE,
                 should_send,
             );
+        }
+
+        if moving_on_secondary {
+            if let Some(mapped) = self.layout.interactive_move_window_mut() {
+                mapped.send_frame(
+                    output,
+                    frame_callback_time,
+                    FRAME_CALLBACK_THROTTLE,
+                    should_send,
+                );
+            }
         }
 
         for surface in layer_map_for_output(output).layers() {
@@ -5776,7 +5978,11 @@ impl Niri {
             );
         }
 
-        for mapped in self.layout.windows_for_output(output) {
+        for mapped in self
+            .layout
+            .windows_for_output(output)
+            .chain(self.interactive_move_window_on_secondary_output(output))
+        {
             mapped.window.take_presentation_feedback(
                 &mut feedback,
                 surface_primary_scanout_output,

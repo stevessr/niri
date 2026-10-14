@@ -4048,3 +4048,136 @@ proptest! {
         check_ops_with_options(options, ops);
     }
 }
+
+#[test]
+fn dragged_window_overlaps_adjacent_output() {
+    let pos = Point::from((80., 10.));
+    let tile_size = Size::from((70., 30.));
+    let size = Size::from((100., 100.));
+
+    // The window straddles the edge between two horizontally adjacent outputs.
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((0., 0.)),
+        size,
+    ));
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-100., 0.)),
+        size,
+    ));
+
+    // The remote third monitor is not intersected.
+    assert!(!interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-200., 0.)),
+        size,
+    ));
+}
+
+#[test]
+fn dragged_window_respects_vertical_output_boundaries() {
+    let pos = Point::from((30., 90.));
+    let tile_size = Size::from((80., 40.));
+    let size = Size::from((100., 100.));
+
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((0., -100.)),
+        size,
+    ));
+    // Touching, without crossing, must not paint the other output.
+    assert!(!interactive_move_overlaps_output(
+        Point::from((30., 60.)),
+        Size::from((50., 40.)),
+        Point::from((0., -100.)),
+        size,
+    ));
+    // Outputs to the left don't receive the drag preview.
+    assert!(!interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-200., 0.)),
+        size,
+    ));
+}
+
+#[test]
+fn dragged_window_handles_negative_origin_and_output_gaps() {
+    let tile = Size::from((150., 70.));
+    let screen = Size::from((100., 100.));
+
+    // Moving a window from an output at x=-100 to an output at x=0.
+    // source_to_target is source origin minus destination origin.
+    assert!(interactive_move_overlaps_output(
+        Point::from((50., 20.)),
+        tile,
+        Point::from((-100., 0.)),
+        screen,
+    ));
+
+    // A physical gap of 100 logical pixels between outputs must not result
+    // in a phantom window on the other side.
+    assert!(!interactive_move_overlaps_output(
+        Point::from((25., 20.)),
+        Size::from((50., 50.)),
+        Point::from((-200., 0.)),
+        screen,
+    ));
+}
+
+#[test]
+fn dragged_window_clips_to_differently_sized_output() {
+    // A small portrait output, placed above a large landscape output.
+    // The overlap calculation uses logical sizes, not physical pixels.
+    let portrait = Size::from((80., 160.));
+    let tile = Size::from((60., 80.));
+    assert!(interactive_move_overlaps_output(
+        Point::from((10., 100.)),
+        tile,
+        Point::from((0., -160.)),
+        portrait,
+    ));
+    assert!(!interactive_move_overlaps_output(
+        Point::from((90., 100.)),
+        tile,
+        Point::from((0., -160.)),
+        portrait,
+    ));
+}
+
+#[test]
+fn dragged_window_fractional_scale_uses_logical_intersection() {
+    // Physical modes/scales: 2560 / 1.25 = 2048 logical, 3840 / 2 = 1920.
+    // Only the logical output geometries matter for intersection.
+    let source_size = Size::from((2048., 1280.));
+    let dest_size = Size::from((1920., 1080.));
+    let tile_size = Size::from((480., 320.));
+    let pos = Point::from((1980., 250.));
+
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((0., 0.)),
+        source_size,
+    ));
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-2048., 0.)),
+        dest_size,
+    ));
+
+    // Moving exactly to the left edge of the source must not appear on the
+    // right-hand display, even with fractional coordinate rounding.
+    assert!(!interactive_move_overlaps_output(
+        Point::from((1568., 250.)),
+        tile_size,
+        Point::from((-2048., 0.)),
+        dest_size,
+    ));
+}

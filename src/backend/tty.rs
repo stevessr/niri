@@ -1546,6 +1546,12 @@ impl Tty {
         }
 
         let render_node = device.render_node.unwrap_or(self.primary_render_node);
+        if node != self.primary_node {
+            info!(
+                "output {connector_name:?}: presenting from compositor render node {} on DRM device {} (render node {:?})",
+                self.primary_render_node, node, device.render_node
+            );
+        }
         let renderer = self.gpu_manager.single_renderer(&render_node)?;
         let render_formats = Bind::<Dmabuf>::supported_formats(&renderer).unwrap_or_default();
         let render_formats = &render_formats;
@@ -2182,7 +2188,13 @@ impl Tty {
             if debug.enable_overlay_planes {
                 flags.insert(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
             }
-            if debug.disable_direct_scanout || color_transform_active {
+            // A dragged window visible on multiple outputs must be composed
+            // separately for each scanout device. Otherwise direct scanout can
+            // bypass per-output clipping and cross-device format negotiation.
+            if debug.disable_direct_scanout
+                || color_transform_active
+                || niri.cross_output_drag_requires_compositing(output)
+            {
                 flags.remove(primary_scanout_flag);
                 flags.remove(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
             }

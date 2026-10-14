@@ -2348,27 +2348,26 @@ impl<W: LayoutElement> Layout<W> {
         &self,
         output: &Output,
         pos_within_output: Point<f64, Logical>,
+        source_to_target: Point<f64, Logical>,
     ) -> Option<(&W, HitType)> {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.output == *output {
-                if self.overview_progress.is_some() {
-                    let zoom = self.overview_zoom();
-                    let tile_pos = move_.tile_render_location(zoom);
-                    let pos_within_tile = (pos_within_output - tile_pos).downscale(zoom);
-                    // During the overview animation, we cannot do input hits because we cannot
-                    // really represent scaled windows properly.
-                    let (win, hit) =
-                        HitType::hit_tile(&move_.tile, Point::from((0., 0.)), pos_within_tile)?;
-                    Some((win, hit.to_activate()))
-                } else {
-                    let tile_pos = move_.tile_render_location(1.);
-                    HitType::hit_tile(&move_.tile, tile_pos, pos_within_output)
-                }
-            } else {
-                None
-            }
+        let InteractiveMoveState::Moving(move_) = self.interactive_move.as_ref()? else {
+            return None;
+        };
+
+        let zoom = self.overview_zoom();
+        let tile_pos = move_.tile_render_location(zoom) + source_to_target;
+        if !self.interactive_move_overlaps_output(output, source_to_target) {
+            return None;
+        }
+
+        if self.overview_progress.is_some() {
+            let pos_within_tile = (pos_within_output - tile_pos).downscale(zoom);
+            // During overview animation, use activation-only hits on scaled windows.
+            let (win, hit) =
+                HitType::hit_tile(&move_.tile, Point::from((0., 0.)), pos_within_tile)?;
+            Some((win, hit.to_activate()))
         } else {
-            None
+            HitType::hit_tile(&move_.tile, tile_pos, pos_within_output)
         }
     }
 
@@ -4376,6 +4375,50 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// The currently dragged window, if the tile has detached from its workspace.
+    pub fn interactive_move_window(&self) -> Option<&W> {
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(move_.tile.window()),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to a detached window, for per-output frame callbacks.
+    pub fn interactive_move_window_mut(&mut self) -> Option<&mut W> {
+        match &mut self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(move_.tile.window_mut()),
+            _ => None,
+        }
+    }
+
+    /// Output that owns the interactively dragged tile. Other outputs can also display
+    /// the visible part of the tile while it crosses their boundaries.
+    pub fn interactive_move_render_output(&self) -> Option<&Output> {
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(&move_.output),
+            _ => None,
+        }
+    }
+
+    /// Whether the dragged window intersects this output after translation.
+    pub fn interactive_move_overlaps_output(
+        &self,
+        output: &Output,
+        source_to_target: Point<f64, Logical>,
+    ) -> bool {
+        let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
+            return false;
+        };
+
+        let zoom = self.overview_zoom();
+        interactive_move_overlaps_output(
+            move_.tile_render_location(zoom),
+            move_.tile.tile_size().upscale(zoom),
+            source_to_target,
+            output_size(output),
+        )
+    }
+
     pub fn interactive_move_is_moving_above_output(&self, output: &Output) -> bool {
         let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
             return false;
@@ -4838,6 +4881,7 @@ impl<W: LayoutElement> Layout<W> {
         &self,
         ctx: RenderCtx<R>,
         output: &Output,
+        source_to_target: Point<f64, Logical>,
         push: &mut dyn FnMut(RescaleRenderElement<TileRenderElement<R>>),
     )
     where
@@ -4852,21 +4896,25 @@ impl<W: LayoutElement> Layout<W> {
             return;
         };
 
-        if &move_.output != output {
+        let zoom = self.overview_zoom();
+        let source_pos = move_.tile_render_location(zoom);
+        if !self.interactive_move_overlaps_output(output, source_to_target) {
             return;
         }
 
-        let scale = Scale::from(move_.output.current_scale().fractional_scale());
-        let zoom = self.overview_zoom();
-        let pos_in_backdrop = move_.tile_render_location(zoom);
-        let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
+        // Position the dragged tile in the destination output's logical space.
+        // The renderer converts elements into this output's physical scale; the
+        // TTY backend then handles any cross-GPU copy required for presentation.
+        let target_pos = source_pos + source_to_target;
+        let scale = Scale::from(output.current_scale().fractional_scale());
+        let xray_pos = XrayPos::new(target_pos, zoom);
 
         move_
             .tile
-            .render(ctx, pos_in_backdrop, xray_pos, true, &mut |elem| {
+            .render(ctx, target_pos, xray_pos, true, &mut |elem| {
                 push(RescaleRenderElement::from_element(
                     elem,
-                    pos_in_backdrop.to_physical_precise_round(scale),
+                    target_pos.to_physical_precise_round(scale),
                     zoom,
                 ));
             });
@@ -5025,6 +5073,19 @@ impl<W: LayoutElement> Layout<W> {
     pub fn is_overview_open(&self) -> bool {
         self.overview_open
     }
+}
+
+/// Test visibility using logical coordinates on the target output. In particular,
+/// touching an output edge must not cause us to render an extra copy of the tile.
+fn interactive_move_overlaps_output(
+    source_pos: Point<f64, Logical>,
+    tile_size: Size<f64, Logical>,
+    source_to_target: Point<f64, Logical>,
+    target_size: Size<f64, Logical>,
+) -> bool {
+    Rectangle::new(source_pos + source_to_target, tile_size)
+        .intersection(Rectangle::from_size(target_size))
+        .is_some()
 }
 
 impl<W: LayoutElement> Default for MonitorSet<W> {
