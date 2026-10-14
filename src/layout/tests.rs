@@ -4105,3 +4105,47 @@ fn dragged_window_respects_vertical_output_boundaries() {
         size,
     ));
 }
+
+#[test]
+fn dragged_window_handles_negative_origin_and_output_gaps() {
+    let tile = Size::from((150., 70.));
+    let screen = Size::from((100., 100.));
+
+    // Moving a window from an output at x=-100 to an output at x=0.
+    // source_to_target is source origin minus destination origin.
+    assert!(interactive_move_overlaps_output(
+        Point::from((50., 20.)),
+        tile,
+        Point::from((-100., 0.)),
+        screen,
+    ));
+
+    // A physical gap of 100 logical pixels between outputs must not result
+    // in a phantom window on the other side.
+    assert!(!interactive_move_overlaps_output(
+        Point::from((25., 20.)),
+        Size::from((50., 50.)),
+        Point::from((-200., 0.)),
+        screen,
+    ));
+}
+
+#[test]
+fn dragged_window_clips_to_differently_sized_output() {
+    // A small portrait output, placed above a large landscape output.
+    // The overlap calculation uses logical sizes, not physical pixels.
+    let portrait = Size::from((80., 160.));
+    let tile = Size::from((60., 80.));
+    assert!(interactive_move_overlaps_output(
+        Point::from((10., 100.)),
+        tile,
+        Point::from((0., -160.)),
+        portrait,
+    ));
+    assert!(!interactive_move_overlaps_output(
+        Point::from((90., 100.)),
+        tile,
+        Point::from((0., -160.)),
+        portrait,
+    ));
+}
