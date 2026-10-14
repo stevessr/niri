@@ -1546,9 +1546,9 @@ impl Tty {
         }
 
         let render_node = device.render_node.unwrap_or(self.primary_render_node);
-        if device.render_node != Some(self.primary_render_node) {
+        if node != self.primary_node {
             info!(
-                "output {connector_name:?}: cross-device presentation from compositor GPU {} to DRM device {} (render node {:?})",
+                "output {connector_name:?}: presenting from compositor render node {} on DRM device {} (render node {:?})",
                 self.primary_render_node, node, device.render_node
             );
         }
