@@ -4149,3 +4149,35 @@ fn dragged_window_clips_to_differently_sized_output() {
         portrait,
     ));
 }
+
+#[test]
+fn dragged_window_fractional_scale_uses_logical_intersection() {
+    // Physical modes/scales: 2560 / 1.25 = 2048 logical, 3840 / 2 = 1920.
+    // Only the logical output geometries matter for intersection.
+    let source_size = Size::from((2048., 1280.));
+    let dest_size = Size::from((1920., 1080.));
+    let tile_size = Size::from((480., 320.));
+    let pos = Point::from((1980., 250.));
+
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((0., 0.)),
+        source_size,
+    ));
+    assert!(interactive_move_overlaps_output(
+        pos,
+        tile_size,
+        Point::from((-2048., 0.)),
+        dest_size,
+    ));
+
+    // Moving exactly to the left edge of the source must not appear on the
+    // right-hand display, even with fractional coordinate rounding.
+    assert!(!interactive_move_overlaps_output(
+        Point::from((1568., 250.)),
+        tile_size,
+        Point::from((-2048., 0.)),
+        dest_size,
+    ));
+}
