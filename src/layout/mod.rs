@@ -2348,27 +2348,26 @@ impl<W: LayoutElement> Layout<W> {
         &self,
         output: &Output,
         pos_within_output: Point<f64, Logical>,
+        source_to_target: Point<f64, Logical>,
     ) -> Option<(&W, HitType)> {
-        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
-            if move_.output == *output {
-                if self.overview_progress.is_some() {
-                    let zoom = self.overview_zoom();
-                    let tile_pos = move_.tile_render_location(zoom);
-                    let pos_within_tile = (pos_within_output - tile_pos).downscale(zoom);
-                    // During the overview animation, we cannot do input hits because we cannot
-                    // really represent scaled windows properly.
-                    let (win, hit) =
-                        HitType::hit_tile(&move_.tile, Point::from((0., 0.)), pos_within_tile)?;
-                    Some((win, hit.to_activate()))
-                } else {
-                    let tile_pos = move_.tile_render_location(1.);
-                    HitType::hit_tile(&move_.tile, tile_pos, pos_within_output)
-                }
-            } else {
-                None
-            }
+        let InteractiveMoveState::Moving(move_) = self.interactive_move.as_ref()? else {
+            return None;
+        };
+
+        let zoom = self.overview_zoom();
+        let tile_pos = move_.tile_render_location(zoom) + source_to_target;
+        if !self.interactive_move_overlaps_output(output, source_to_target) {
+            return None;
+        }
+
+        if self.overview_progress.is_some() {
+            let pos_within_tile = (pos_within_output - tile_pos).downscale(zoom);
+            // During overview animation, use activation-only hits on scaled windows.
+            let (win, hit) =
+                HitType::hit_tile(&move_.tile, Point::from((0., 0.)), pos_within_tile)?;
+            Some((win, hit.to_activate()))
         } else {
-            None
+            HitType::hit_tile(&move_.tile, tile_pos, pos_within_output)
         }
     }
 
@@ -4385,6 +4384,25 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Whether the dragged window intersects this output after translation.
+    pub fn interactive_move_overlaps_output(
+        &self,
+        output: &Output,
+        source_to_target: Point<f64, Logical>,
+    ) -> bool {
+        let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
+            return false;
+        };
+
+        let zoom = self.overview_zoom();
+        interactive_move_overlaps_output(
+            move_.tile_render_location(zoom),
+            move_.tile.tile_size().upscale(zoom),
+            source_to_target,
+            output_size(output),
+        )
+    }
+
     pub fn interactive_move_is_moving_above_output(&self, output: &Output) -> bool {
         let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move else {
             return false;
@@ -4864,12 +4882,7 @@ impl<W: LayoutElement> Layout<W> {
 
         let zoom = self.overview_zoom();
         let source_pos = move_.tile_render_location(zoom);
-        if !interactive_move_overlaps_output(
-            source_pos,
-            move_.tile.tile_size().upscale(zoom),
-            source_to_target,
-            output_size(output),
-        ) {
+        if !self.interactive_move_overlaps_output(output, source_to_target) {
             return;
         }
 
@@ -4882,7 +4895,7 @@ impl<W: LayoutElement> Layout<W> {
 
         move_
             .tile
-            .render(ctx, source_pos, xray_pos, true, &mut |elem| {
+            .render(ctx, target_pos, xray_pos, true, &mut |elem| {
                 push(RescaleRenderElement::from_element(
                     elem,
                     target_pos.to_physical_precise_round(scale),
