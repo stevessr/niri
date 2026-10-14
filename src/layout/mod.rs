@@ -4375,6 +4375,14 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// The currently dragged window, if the tile has detached from its workspace.
+    pub fn interactive_move_window(&self) -> Option<&W> {
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(move_.tile.window()),
+            _ => None,
+        }
+    }
+
     /// Output that owns the interactively dragged tile. Other outputs can also display
     /// the visible part of the tile while it crosses their boundaries.
     pub fn interactive_move_render_output(&self) -> Option<&Output> {
