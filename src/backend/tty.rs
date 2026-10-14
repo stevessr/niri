@@ -2188,7 +2188,13 @@ impl Tty {
             if debug.enable_overlay_planes {
                 flags.insert(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
             }
-            if debug.disable_direct_scanout || color_transform_active {
+            // A dragged window visible on multiple outputs must be composed
+            // separately for each scanout device. Otherwise direct scanout can
+            // bypass per-output clipping and cross-device format negotiation.
+            if debug.disable_direct_scanout
+                || color_transform_active
+                || niri.cross_output_drag_requires_compositing(output)
+            {
                 flags.remove(primary_scanout_flag);
                 flags.remove(FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT);
             }
