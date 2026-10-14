@@ -247,6 +247,11 @@ pub struct Niri {
     // according to their global position.
     pub global_space: Space<Window>,
 
+    /// Extra outputs intersected by the interactively dragged window, beyond
+    /// its owning output. Keep the Window around to send matching leave events
+    /// if the drag finishes, the output disappears, or the window is unmapped.
+    interactive_move_extra_outputs: HashMap<Output, (MappedId, Window)>,
+
     /// Mapped outputs, sorted by their name and position.
     pub sorted_outputs: Vec<Output>,
 
@@ -864,6 +869,7 @@ impl State {
         self.niri.cursor_manager.check_cursor_image_surface_alive();
         self.niri.refresh_pointer_outputs();
         self.niri.global_space.refresh();
+        self.niri.refresh_interactive_move_outputs();
         self.niri.refresh_idle_inhibit();
         self.refresh_pointer_contents();
         foreign_toplevel::refresh(self);
@@ -2852,6 +2858,7 @@ impl Niri {
 
             layout,
             global_space: Space::default(),
+            interactive_move_extra_outputs: HashMap::new(),
             sorted_outputs: Vec::default(),
             output_state: HashMap::new(),
             unmapped_windows: HashMap::new(),
@@ -4143,6 +4150,72 @@ impl Niri {
 
         let state = self.output_state.get(output)?;
         state.lock_surface.as_ref().map(|s| s.wl_surface()).cloned()
+    }
+
+    /// Keep Wayland output membership in sync with the portions of a window
+    /// shown on other monitors during an interactive move.
+    ///
+    /// The layout continues to own enter/leave for the output underneath the
+    /// pointer. Only secondary overlapping outputs are managed here.
+    pub fn refresh_interactive_move_outputs(&mut self) {
+        let moving_window = self
+            .layout
+            .interactive_move_window()
+            .map(|mapped| (*mapped.id(), mapped.window.clone()));
+        let owner = self.layout.interactive_move_render_output().cloned();
+
+        let targets: HashSet<Output> = if moving_window.is_some() {
+            self.global_space
+                .outputs()
+                .filter(|output| {
+                    owner.as_ref() != Some(*output)
+                        && self
+                            .interactive_move_output_offset(output)
+                            .is_some_and(|offset| {
+                                self.layout.interactive_move_overlaps_output(output, offset)
+                            })
+                })
+                .cloned()
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
+        // Drop old memberships first. If an extra output becomes the owner,
+        // layout has already taken responsibility for its enter/leave events.
+        for (output, (id, window)) in
+            mem::take(&mut self.interactive_move_extra_outputs)
+        {
+            if owner.as_ref() == Some(&output) {
+                continue;
+            }
+
+            if moving_window.as_ref().is_some_and(|(current_id, _)| *current_id == id)
+                && targets.contains(&output)
+            {
+                self.interactive_move_extra_outputs
+                    .insert(output, (id, window));
+            } else {
+                window.output_leave(&output);
+            }
+        }
+
+        if let Some((id, window)) = moving_window {
+            for output in targets {
+                if self.interactive_move_extra_outputs.contains_key(&output) {
+                    continue;
+                }
+
+                // The full window is considered entered while any portion
+                // intersects this output, matching the LayoutElement behavior.
+                window.output_enter(
+                    &output,
+                    Rectangle::from_size(Size::from((i32::MAX, i32::MAX))),
+                );
+                self.interactive_move_extra_outputs
+                    .insert(output, (id, window.clone()));
+            }
+        }
     }
 
     /// Schedules an immediate redraw on all outputs if one is not already scheduled.
