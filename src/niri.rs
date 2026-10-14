@@ -4181,6 +4181,27 @@ impl Niri {
             HashSet::new()
         };
 
+        // Use the highest preferred scale among overlapping displays, as
+        // required for a single Wayland surface that spans mixed-DPI outputs.
+        // The layout still owns the tile geometry; this is a client hint.
+        let preferred_output = owner
+            .iter()
+            .chain(targets.iter())
+            .max_by(|a, b| {
+                a.current_scale()
+                    .fractional_scale()
+                    .total_cmp(&b.current_scale().fractional_scale())
+            })
+            .cloned();
+        if let Some(preferred_output) = preferred_output {
+            if let Some(mapped) = self.layout.interactive_move_window_mut() {
+                mapped.set_preferred_scale_transform(
+                    preferred_output.current_scale(),
+                    preferred_output.current_transform(),
+                );
+            }
+        }
+
         // Drop old memberships first. If an extra output becomes the owner,
         // layout has already taken responsibility for its enter/leave events.
         for (output, (id, window)) in mem::take(&mut self.interactive_move_extra_outputs) {
