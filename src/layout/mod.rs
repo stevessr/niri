@@ -4383,6 +4383,14 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Mutable access to a detached window, for per-output frame callbacks.
+    pub fn interactive_move_window_mut(&mut self) -> Option<&mut W> {
+        match &mut self.interactive_move {
+            Some(InteractiveMoveState::Moving(move_)) => Some(move_.tile.window_mut()),
+            _ => None,
+        }
+    }
+
     /// Output that owns the interactively dragged tile. Other outputs can also display
     /// the visible part of the tile while it crosses their boundaries.
     pub fn interactive_move_render_output(&self) -> Option<&Output> {
