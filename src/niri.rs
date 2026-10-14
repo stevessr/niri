@@ -4161,7 +4161,7 @@ impl Niri {
         let moving_window = self
             .layout
             .interactive_move_window()
-            .map(|mapped| (*mapped.id(), mapped.window.clone()));
+            .map(|mapped| (mapped.id(), mapped.window.clone()));
         let owner = self.layout.interactive_move_render_output().cloned();
 
         let targets: HashSet<Output> = if moving_window.is_some() {
