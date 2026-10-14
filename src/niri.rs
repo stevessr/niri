@@ -4717,6 +4717,20 @@ impl Niri {
         Some((source_geometry.loc - target_geometry.loc).to_f64())
     }
 
+    /// A dragged window can also be visible on an output which does not own
+    /// its workspace. Keep this query consistent across damage, frame callbacks
+    /// and presentation feedback; otherwise clients on the other monitor stall.
+    fn interactive_move_window_on_secondary_output(&self, output: &Output) -> Option<&Mapped> {
+        if self.layout.interactive_move_render_output()? == output {
+            return None;
+        }
+        let offset = self.interactive_move_output_offset(output)?;
+        self.layout
+            .interactive_move_overlaps_output(output, offset)
+            .then(|| self.layout.interactive_move_window())
+            .flatten()
+    }
+
     pub fn render_to_vec<R: NiriRenderer>(
         &self,
         ctx: RenderCtx<R>,
@@ -5387,7 +5401,11 @@ impl Niri {
             return;
         }
 
-        let current = self.layout.windows_for_output(output).any(|mapped| {
+        let current = self
+            .layout
+            .windows_for_output(output)
+            .chain(self.interactive_move_window_on_secondary_output(output))
+            .any(|mapped| {
             mapped.rules().variable_refresh_rate == Some(true) && {
                 let mut visible = false;
                 mapped.window.with_surfaces(|surface, states| {
@@ -5453,13 +5471,14 @@ impl Niri {
             );
         }
 
-        // We're only updating the current output's windows and layer surfaces. This should be fine
-        // as in niri they can only be rendered on a single output at a time.
-        //
-        // The reason to do this at all is that it keeps track of whether the surface is visible or
-        // not in a unified way with the pointer surfaces, which makes the logic elsewhere simpler.
-
-        for mapped in self.layout.windows_for_output(output) {
+        // Include the moving window on secondary displays when it overlaps.
+        // Its primary presentation output may differ from the workspace owner.
+        // Other regular windows remain local to their workspace output.
+        for mapped in self
+            .layout
+            .windows_for_output(output)
+            .chain(self.interactive_move_window_on_secondary_output(output))
+        {
             let win = &mapped.window;
             let offscreen_data = mapped.offscreen_data();
             let offscreen_data = offscreen_data.as_ref();
@@ -5617,6 +5636,23 @@ impl Niri {
             );
         }
 
+        // The cross-output moving window should use feedback from the
+        // *primary* presentation output, instead of oscillating between GPUs.
+        if let Some(mapped) = self.interactive_move_window_on_secondary_output(output) {
+            mapped.window.send_dmabuf_feedback(
+                output,
+                surface_primary_scanout_output,
+                |surface, _| {
+                    select_dmabuf_feedback(
+                        surface,
+                        render_element_states,
+                        &feedback.render,
+                        &feedback.scanout,
+                    )
+                },
+            );
+        }
+
         for surface in layer_map_for_output(output).layers() {
             surface.send_dmabuf_feedback(
                 output,
@@ -5722,6 +5758,11 @@ impl Niri {
 
         let frame_callback_time = get_monotonic_time();
 
+        // Compute visibility before mutably borrowing the layout for frame dispatch.
+        let moving_on_secondary = self
+            .interactive_move_window_on_secondary_output(output)
+            .is_some();
+
         for mapped in self.layout.windows_for_output_mut(output) {
             mapped.send_frame(
                 output,
@@ -5729,6 +5770,17 @@ impl Niri {
                 FRAME_CALLBACK_THROTTLE,
                 should_send,
             );
+        }
+
+        if moving_on_secondary {
+            if let Some(mapped) = self.layout.interactive_move_window_mut() {
+                mapped.send_frame(
+                    output,
+                    frame_callback_time,
+                    FRAME_CALLBACK_THROTTLE,
+                    should_send,
+                );
+            }
         }
 
         for surface in layer_map_for_output(output).layers() {
@@ -5877,7 +5929,11 @@ impl Niri {
             );
         }
 
-        for mapped in self.layout.windows_for_output(output) {
+        for mapped in self
+            .layout
+            .windows_for_output(output)
+            .chain(self.interactive_move_window_on_secondary_output(output))
+        {
             mapped.window.take_presentation_feedback(
                 &mut feedback,
                 surface_primary_scanout_output,
