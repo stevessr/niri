@@ -4183,9 +4183,7 @@ impl Niri {
 
         // Drop old memberships first. If an extra output becomes the owner,
         // layout has already taken responsibility for its enter/leave events.
-        for (output, (id, window)) in
-            mem::take(&mut self.interactive_move_extra_outputs)
-        {
+        for (output, (id, window)) in mem::take(&mut self.interactive_move_extra_outputs) {
             if owner.as_ref() == Some(&output) {
                 continue;
             }
