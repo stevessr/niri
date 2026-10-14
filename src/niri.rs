@@ -4731,6 +4731,34 @@ impl Niri {
             .flatten()
     }
 
+    /// Direct scanout is unsafe for a dragged tile that needs to be composed
+    /// into more than one output. Such frames must go through the compositor
+    /// before being presented by each DRM device.
+    pub fn cross_output_drag_requires_compositing(&self, output: &Output) -> bool {
+        let Some(_) = self.layout.interactive_move_render_output() else {
+            return false;
+        };
+
+        let visible_on_target = self
+            .interactive_move_output_offset(output)
+            .is_some_and(|offset| self.layout.interactive_move_overlaps_output(output, offset));
+        if !visible_on_target {
+            return false;
+        }
+
+        self.global_space
+            .outputs()
+            .filter(|candidate| {
+                self.interactive_move_output_offset(candidate)
+                    .is_some_and(|offset| {
+                        self.layout.interactive_move_overlaps_output(candidate, offset)
+                    })
+            })
+            .take(2)
+            .count()
+            > 1
+    }
+
     pub fn render_to_vec<R: NiriRenderer>(
         &self,
         ctx: RenderCtx<R>,
